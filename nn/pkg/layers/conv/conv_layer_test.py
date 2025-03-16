@@ -58,7 +58,7 @@ class TestConvLayer(unittest.TestCase):
         conv.filters = filter
         conv.biases = np.zeros((1, 1, 1, 3))
 
-        X_convolved, _ = conv.convolve(X)
+        X_convolved = conv.convolve_forward(X)
         X_convolved_expected = np.array(
             [[[[0], [0], [0], [0]],
               [[30], [10], [-10], [-30]],
@@ -87,13 +87,13 @@ class TestConvLayer(unittest.TestCase):
             [
                 [[1, 0, 1/9]], [[0, -1, 1/9]], [[-1, 0, 1/9]]
             ]
-        ])
+        ]).astype(np.float64)
 
         conv = Convolution(input_channels=1, filter_size=3, num_filters=3, stride=1, padding=0)
         conv.filters = filters
-        conv.biases = np.array([0.1, 0.2, 0.3]).reshape(1, 1, 1, 3)
+        conv.biases = np.array([0.1, 0.2, 0.3]).reshape(1, 1, 1, 3).astype(np.float64)
 
-        X_convolved, _ = conv.convolve(X)
+        X_convolved = conv.convolve_forward(X)
         X_convolved_expected = np.array(
             [
                 [
@@ -119,6 +119,38 @@ class TestConvLayer(unittest.TestCase):
         )
 
         self.assertTrue(np.allclose(X_convolved, X_convolved_expected), "internal values are different")
+
+    def test_convolve_backward(self):
+        X = np.array(
+            [[[[1], [2], [3]],
+              [[4], [5], [6]],
+              [[7], [8], [9]]]]
+        )
+
+        filters = np.array([
+            [[[1]], [[-1]]],
+            [[[1]], [[0]]]
+        ]).astype(np.float64)
+
+        conv = Convolution(input_channels=1, filter_size=2, num_filters=1, stride=1, padding=0)
+        conv.filters = filters
+        conv.biases = np.array([0., 0., 0.], dtype=np.float32).reshape(1, 1, 1, 3)
+
+        X_convolved = conv.convolve_forward(X)
+
+        dX = conv.convolve_backward(X_convolved, 1.)
+
+        dX_expected = np.array(
+            [
+            [
+                [[3], [1], [-4]],
+                [[9], [5], [-7]],
+                [[6], [7], [0]]
+            ]
+            ]
+        ).astype(np.float64)
+        
+        self.assertTrue(np.allclose(dX, dX_expected), "internal values are different")
 
 
 if __name__ == '__main__':

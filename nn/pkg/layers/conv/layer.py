@@ -18,6 +18,9 @@ class Convolution:
             num_filters (int): number of channels in the output
             stride (int): stride of the convolution
             padding (int): padding to be added to the input
+            
+        Raises:
+            ValueError: if input_channels, stride, filter_size or num_filters are less than 1            
         """
 
         if input_channels < 1:
@@ -32,8 +35,8 @@ class Convolution:
         if num_filters < 1:
             raise ValueError("number of filters should be greater than 0")
 
-        self.filters = np.random.randn(filter_size, filter_size, input_channels, num_filters)
-        self.biases = np.random.randn(1, 1, 1, num_filters)
+        self.filters = np.random.randn(filter_size, filter_size, input_channels, num_filters).astype(np.float64)
+        self.biases = np.random.randn(1, 1, 1, num_filters).astype(np.float64)
         self.stride = stride
         self.padding = padding
 
@@ -63,7 +66,7 @@ class Convolution:
         """
         return np.sum(X * self.filters[:, :, :, filter_idx]) + self.biases[0, 0, 0, filter_idx]
 
-    def convolve(self, X: np.ndarray):
+    def convolve_forward(self, X: np.ndarray):
         """
             convolves the input with the predefined filters
 
@@ -72,7 +75,6 @@ class Convolution:
 
         Returns:
             Z (np.ndarray): output of the convolution - matrix of shape (m, output_height, output_width, num_filters)
-            cache (tuple): cache to be used in backpropagation
         """
 
         (m, prev_height, prev_width, _) = X.shape
@@ -101,6 +103,58 @@ class Convolution:
                     for c in range(num_filters):
                         Z[i, h, w, c] = self.convolve_single_step(part_to_convolve, c)
 
-        cache = (X, self.filters, self.biases, self.stride, self.padding)
+        self.cache = X
 
-        return Z, cache
+        return Z
+    
+    def convolve_backward(self, dZ: np.ndarray, learning_rate: float):
+        """
+        backward propagation for a convolution function
+
+        Args:
+            dZ (np.ndarray): gradient of the cost with respect to the output of the conv layer (Z), matrix shape (m, output_height, output_width, num_filters)
+            learning_rate (float): learning rate for the optimization
+            
+        Returns:
+            dX (np.ndarray): gradient of the input (X), matrix shape (m, height, width, input_channels)
+        """
+        
+        X = self.cache
+        (m, output_height, output_width, num_filters) = dZ.shape
+        
+        filter_size = self.filters.shape[0]
+        
+        dX = np.zeros(X.shape)
+        dW = np.zeros(self.filters.shape)
+        db = np.zeros(self.biases.shape)
+        
+        X_padded = self.zero_pad(X)
+        dX_padded = self.zero_pad(dX)
+        
+        for i in range(m):
+            x_padded = X_padded[i]
+            dx_padded = dX_padded[i]
+            
+            for h in range(output_height):
+                vert_start = h * self.stride
+                vert_end = vert_start + filter_size
+                
+                for w in range(output_width):
+                    horiz_start = w * self.stride
+                    horiz_end = horiz_start + filter_size
+                    
+                    for c in range(num_filters):
+                        dx_padded[vert_start:vert_end, horiz_start:horiz_end, :] += self.filters[:, :, :, c] * dZ[i, h, w, c]
+                        dW[:, :, :, c] += x_padded[vert_start:vert_end, horiz_start:horiz_end, :] * dZ[i, h, w, c]
+                        db[:, :, :, c] += dZ[i, h, w, c]
+            
+            # remove padding if necessary
+            if self.padding == 0:
+                dX[i, :, :, :] = dx_padded
+            else:
+                dX[i, :, :, :] = dx_padded[self.padding:-self.padding, self.padding:-self.padding, :]
+                
+        self.filters -= dW * learning_rate
+        self.biases -= db * learning_rate
+            
+        return dX
