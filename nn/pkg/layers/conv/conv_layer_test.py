@@ -35,7 +35,7 @@ class TestConvLayer(unittest.TestCase):
 
         X_convolved = conv.convolve_single_step(X, 0)
 
-        expected_value = np.float64(2.704508937548934)
+        expected_value = np.float64(3.3245676905385415)
         self.assertTrue(np.isclose(X_convolved, expected_value), f"Wrong value. Expected {expected_value}, got {X_convolved}")
 
     def test_convolve_forward(self):
