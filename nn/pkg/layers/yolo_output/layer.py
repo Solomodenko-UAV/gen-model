@@ -36,6 +36,9 @@ class YoloOutput:
 
         Args:
             X (np.ndarray): input to the yolo output layer - matrix of shape (m, input_size), represents a batch of m images
+            
+        Returns:
+            A (np.ndarray): output of the yolo output layer - matrix of shape (m, S, S, out_per_cell), represents a batch of m images
         """
 
         self.cache['X'] = X
@@ -45,7 +48,6 @@ class YoloOutput:
         self.cache['A'] = np.copy(A)  # before any activation
 
         A = A.reshape(m, self.S, self.S, self.out_per_cell)
-        self.cache['A_reshaped'] = np.copy(A)  # before activation, after reshaping
 
         # iterate over predicted bounding boxes in every grid cell
         for b in range(self.B):
@@ -79,7 +81,6 @@ class YoloOutput:
 
         X = self.cache['X']  # (m, input_size)
         A = self.cache['A']  # (m, S, S, out_per_cell)
-        A_reshaped = self.cache['A_reshaped']  # (m, S, S, out_per_cell)
         Z = self.cache['Z']  # (m, S, S, out_per_cell)
 
         # pre-activation output

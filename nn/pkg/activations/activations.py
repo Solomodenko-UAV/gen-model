@@ -37,3 +37,10 @@ def vectorized_softmax_derivative(s: np.ndarray, grad_soft: np.ndarray):
     dot = np.sum(s * grad_soft, axis=-1, keepdims=True)
     # Jacobian-vector product in a vectorized manner.
     return s * (grad_soft - dot)
+
+
+def relu(x):
+    return np.maximum(0, x)
+
+def relu_derivative(x):
+    return np.where(x > 0, 1, 0)

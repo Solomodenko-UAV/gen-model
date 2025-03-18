@@ -73,7 +73,7 @@ class Convolution:
             convolves the input with the predefined filters
 
         Args:
-            X (np.ndarray): output activations of the previous layer - matrix of shape (m, height, width, prev_layer_num_filters)
+            X (np.ndarray): output activations of the previous layer - matrix of shape (m, height, width, input_channels)
 
         Returns:
             Z (np.ndarray): output of the convolution - matrix of shape (m, output_height, output_width, num_filters)
