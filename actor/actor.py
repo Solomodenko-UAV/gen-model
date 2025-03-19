@@ -75,7 +75,7 @@ class YOLOActorPhoto():
         Returns:
             tuple: tuple containing the images and the annotations. 
                     Images are of shape (m, height, width, num_channels) and 
-                    annotations are of shape (m, 8)
+                    annotations are of shape (m, n, 8)
         """
         entries = os.listdir(self.data_folder)
         img_files = {}
@@ -87,7 +87,7 @@ class YOLOActorPhoto():
 
         I = []
         IR = np.zeros((len(img_files), *self.model_input_img_res, 3))
-        A = []
+        annotations_list = [[] for _ in range(len(img_files))]
         i = 0
 
         for file_name, img_path in img_files.items():
@@ -96,34 +96,45 @@ class YOLOActorPhoto():
 
             I.append(np.array(img))
             IR[i] = img_resized
-            A.append(np.array(annotations))
+            annotations_list[i] = np.array(annotations).astype(np.float64)
             i += 1
 
-        return np.array(I).astype(np.float64), IR, np.array(annotations).astype(np.float64)
+        return np.array(I).astype(np.float64), IR, annotations_list
 
     def run_training_loop(self, epochs=10, learning_rate=0.01):
         original_images, resized_images, annotations = self.load_data()
+        losses = []
         for i in range(epochs):
-            Y = self.model.forward(resized_images)
-            loss = self.train_on_single_image(
+            Y = self.model.forward[128, 128](resized_images)
+            loss = self.train_on_multiple_images(
                 Y=Y,
                 Y_hat=annotations,
                 original_img_shape=(original_images[0].shape[0], original_images[0].shape[1]),
                 learning_rate=learning_rate
             )
 
+            losses.append(loss)
+
             print(f"Epoch {i}, loss: {loss}")
 
-    def train_on_single_image(self,
-                              Y: np.ndarray,
-                              Y_hat: np.ndarray,
-                              original_img_shape: tuple,
-                              learning_rate: float):
+        plt.plot(range(epochs), losses, label="Loss")
+        plt.xlabel("Epochs")
+        plt.ylabel("Loss")
+        plt.title("Training Loss Over Epochs")
+        plt.legend()
+        plt.grid(True)
+        plt.show()
+
+    def train_on_multiple_images(self,
+                                 Y: np.ndarray,
+                                 Y_hat: list,
+                                 original_img_shape: tuple,
+                                 learning_rate: float):
         """
         Calculate the loss
         Args:
-            Y (np.ndarray): predicted values - matrix of shape (S, S, B*5+C), represents a batch of m images
-            Y_hat (np.ndarray): true values - matrix of shape (m, 8), represents a batch of m annotations
+            Y (np.ndarray): predicted values - matrix of shape (m, S, S, B*5+C), represents a batch of m images
+            Y_hat (np.ndarray): true values - matrix of shape (m, n, 8), represents a batch of m annotations
             original_img_shape (tuple): shape of the original image (height, width)
             model_input_img_shape (tuple): shape of the image that the model accepts (height, width)
 
@@ -131,9 +142,13 @@ class YOLOActorPhoto():
             loss(float): loss value
         """
 
-        Y_target = self._cook_annotations(Y_hat, original_img_shape, self.model_input_img_res)
-        loss, grad_A = self._calc_loss_and_gradient_single_image(Y, Y_target)
-        self.model.backward(grad_A, learning_rate)
+        Y_target = np.zeros((len(Y_hat), self.model.S, self.model.S, self.model.B * 5 + self.model.C))
+        for i in range(len(Y_hat)):
+            Y_target[i] = self._cook_annotations(Y_hat[i], original_img_shape, self.model_input_img_res)
+
+        # loss, grad_A = self._calc_loss_and_gradient(Y, Y_target)
+        loss, grad_A = self._calc_loss_and_gradient[128, 128](Y, Y_target)
+        self.model.backward[128, 128](grad_A, learning_rate)
 
         return loss
 
@@ -201,13 +216,14 @@ class YOLOActorPhoto():
 
         return Y_target
 
-    def _calc_loss_and_gradient_single_image(self, A: np.ndarray, Y_target: np.ndarray):
+
+    def _calc_loss_and_gradient(self, A: np.ndarray, Y_target: np.ndarray):
         """
         Calculate the loss and gradient
 
         Args:
             A (np.ndarray): predicted values - matrix of shape (m, S, S, B*5+C). For this function m == 1 is required
-            Y_target (np.ndarray): true values - matrix of shape (S, S, B*5+C)
+            Y_target (np.ndarray): true values - matrix of shape (m, S, S, B*5+C)
 
         Returns:
             mean_loss(float): mean loss value over the image
@@ -228,7 +244,7 @@ class YOLOActorPhoto():
             for row in range(S):
                 for col in range(S):
                     prediction = A[i, row, col]  # [B * 5 + C] array
-                    target = Y_target[row, col]
+                    target = Y_target[i, row, col]
 
                     # for each bounding box predictor in this cell
                     for b in range(B):
