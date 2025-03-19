@@ -23,7 +23,7 @@ class YOLOActorPhoto():
         self.model = model
         self.mini_batch_size = mini_batch_size
 
-    def load_data(self):
+    def func_for_tests(self):
         entries = os.listdir(self.data_folder)
         img_files = {}
         annotation_files = {}
@@ -68,40 +68,100 @@ class YOLOActorPhoto():
                 # plt.axis('off')
                 plt.show()
 
-    def calc_loss(self, A: np.ndarray, Y: np.ndarray, original_img_shape: tuple, model_input_img_shape: tuple):
+    def load_data(self):
+        """
+        Load the data from the data folder
+
+        Returns:
+            tuple: tuple containing the images and the annotations. 
+                    Images are of shape (m, height, width, num_channels) and 
+                    annotations are of shape (m, 8)
+        """
+        entries = os.listdir(self.data_folder)
+        img_files = {}
+        annotation_files = {}
+        for entry in entries:
+            file_name = entry.split('.')[0]
+            img_files[file_name] = os.path.join(self.data_folder, entry)
+            annotation_files[file_name] = os.path.join(self.annotation_folder, file_name + '.txt')
+
+        I = []
+        IR = np.zeros((len(img_files), *self.model_input_img_res, 3))
+        A = []
+        i = 0
+
+        for file_name, img_path in img_files.items():
+            img, img_resized = self._prepare_single_image(img_path)
+            annotations = _extract_visDrone_annotations(annotation_files[file_name])
+
+            I.append(np.array(img))
+            IR[i] = img_resized
+            A.append(np.array(annotations))
+            i += 1
+
+        return np.array(I).astype(np.float64), IR, np.array(annotations).astype(np.float64)
+
+    def run_training_loop(self, epochs=10, learning_rate=0.01):
+        original_images, resized_images, annotations = self.load_data()
+        for i in range(epochs):
+            Y = self.model.forward(resized_images)
+            loss = self.train_on_single_image(
+                Y=Y,
+                Y_hat=annotations,
+                original_img_shape=(original_images[0].shape[0], original_images[0].shape[1]),
+                learning_rate=learning_rate
+            )
+
+            print(f"Epoch {i}, loss: {loss}")
+
+    def train_on_single_image(self,
+                              Y: np.ndarray,
+                              Y_hat: np.ndarray,
+                              original_img_shape: tuple,
+                              learning_rate: float):
         """
         Calculate the loss
         Args:
-            A (np.ndarray): predicted values - matrix of shape (S, S, B*5+C), represents a batch of m images
-            Y (np.ndarray): true values - matrix of shape (m, 8), represents a batch of m annotations
+            Y (np.ndarray): predicted values - matrix of shape (S, S, B*5+C), represents a batch of m images
+            Y_hat (np.ndarray): true values - matrix of shape (m, 8), represents a batch of m annotations
             original_img_shape (tuple): shape of the original image (height, width)
             model_input_img_shape (tuple): shape of the image that the model accepts (height, width)
+
+        Returns:
+            loss(float): loss value
         """
 
-        Y_target = self._cook_annotations(Y, original_img_shape, model_input_img_shape)
+        Y_target = self._cook_annotations(Y_hat, original_img_shape, self.model_input_img_res)
+        loss, grad_A = self._calc_loss_and_gradient_single_image(Y, Y_target)
+        self.model.backward(grad_A, learning_rate)
 
-    def _cook_annotations(self, Y: np.ndarray, original_img_shape: tuple, model_input_img_shape: tuple):
+        return loss
+
+    def _cook_annotations(self, annotations: np.ndarray, original_img_shape: tuple, model_input_img_shape: tuple):
         """
         convert list of annotations to the model output shape
 
         Args:
-            Y (np.ndarray): true values - matrix of shape (m, 8), represents a batch of m annotations
-            original_img_shape (tuple): shape of the original image (height, width)
-            model_input_img_shape (tuple): shape of the image that the model accepts (height, width)
-        """
-        m = Y.shape[0]
-        W = original_img_shape[0] / model_input_img_shape[0]
-        H = original_img_shape[1] / model_input_img_shape[1]
+            annotations (np.ndarray): true values - matrix of shape (m, 8), represents a batch of m annotations
+            original_img_shape (tuple): shape of the original image (width, height)
+            model_input_img_shape (tuple): shape of the image that the model accepts (width, height)
 
-        Y_norm = Y.copy()
+        Returns:
+            Y_target (np.ndarray): true values - matrix of shape (S, S, B*5+C), represents a batch of m images
+        """
+        m = annotations.shape[0]
+        W = original_img_shape[1] / model_input_img_shape[1]
+        H = original_img_shape[0] / model_input_img_shape[0]
+
+        Y_norm = annotations.copy()
         Y_norm[:, visDrone.top_left_x_idx] /= W
         Y_norm[:, visDrone.top_left_y_idx] /= H
         Y_norm[:, visDrone.width_idx] /= W
         Y_norm[:, visDrone.height_idx] /= H
 
         # assign annotations to a grid cells
-        X_center = (Y_norm[visDrone.top_left_x_idx] + Y_norm[visDrone.width_idx] / 2)
-        Y_center = (Y_norm[visDrone.top_left_y_idx] + Y_norm[visDrone.height_idx] / 2)
+        X_center = (Y_norm[:, visDrone.top_left_x_idx] + Y_norm[:, visDrone.width_idx] / 2)
+        Y_center = (Y_norm[:, visDrone.top_left_y_idx] + Y_norm[:, visDrone.height_idx] / 2)
         cell_height = model_input_img_shape[0] / self.model.S
         cell_width = model_input_img_shape[1] / self.model.S
 
@@ -115,7 +175,7 @@ class YOLOActorPhoto():
 
         # create one-hot encoding vector for the class
         class_targets = np.zeros((m, self.model.C))
-        class_targets[Y_norm[:, visDrone.class_idx]] = 1
+        class_targets[Y_norm[:, visDrone.category_idx].astype(np.int8)] = 1
 
         # construct output matrix - aka reshape annotations to the model output shape
         Y_target = np.zeros((self.model.S, self.model.S, self.model.B * 5 + self.model.C))
@@ -148,6 +208,10 @@ class YOLOActorPhoto():
         Args:
             A (np.ndarray): predicted values - matrix of shape (m, S, S, B*5+C). For this function m == 1 is required
             Y_target (np.ndarray): true values - matrix of shape (S, S, B*5+C)
+
+        Returns:
+            mean_loss(float): mean loss value over the image
+            grad_A(np.ndarray): gradient of the loss with respect to A - matrix of shape (m, S, S, B*5+C)
         """
         loss = 0.0
         grad_A = np.zeros_like(A)
@@ -163,13 +227,13 @@ class YOLOActorPhoto():
         for i in range(m):
             for row in range(S):
                 for col in range(S):
-                    prediction = A[i, row, col]
+                    prediction = A[i, row, col]  # [B * 5 + C] array
                     target = Y_target[row, col]
 
                     # for each bounding box predictor in this cell
                     for b in range(B):
                         idx = b * 5
-                        pred_bbox = prediction[idx:idx+5]  # [x, y, w, h, confidence]
+                        pred_bbox = prediction[idx:idx+5]  # [6] array
                         target_bbox = target[idx:idx+5]
 
                         # if model thinks there is no object in this box
@@ -178,13 +242,40 @@ class YOLOActorPhoto():
                             loss += lambda_noobj * (conf_diff ** 2)
                             grad_A[i, row, col, idx + visDrone.object_existence_idx] = 2 * lambda_noobj * conf_diff
                             continue
-                        
+
                         # if model thinks there is an object in this box
                         # localization loss for x, y
-                        for j in range(2):
+                        # calc squared error
+                        for j in range(visDrone.top_left_y_idx + 1):
                             diff = pred_bbox[j] - target_bbox[j]
                             loss += lambda_coord * (diff ** 2)
                             grad_A[i, row, col, idx + j] = 2 * lambda_coord * diff
+
+                        # for width and height, apply square root transformation to stabilize small boxes
+                        for j in range(visDrone.width_idx, visDrone.height_idx + 1):
+                            # avoid division by zero
+                            pred_sqrt = np.sqrt(np.maximum(pred_bbox[j], 1e-6))
+                            target_sqrt = np.sqrt(target_bbox[j])
+
+                            diff = pred_sqrt - target_sqrt
+                            loss += lambda_coord * (diff ** 2)
+                            # derivative of sqrt (that we've just applied couple lines above) is 1/(2*sqrt(x))
+                            grad_A[i, row, col, idx+j] = 2 * lambda_coord * diff * (1/(2*np.sqrt(np.maximum(pred_bbox[j], 1e-6))))
+
+                        # confidence loss
+                        conf_diff = pred_bbox[visDrone.object_existence_idx] - target_bbox[visDrone.object_existence_idx]
+                        loss += (conf_diff ** 2)
+                        grad_A[i, row, col, idx + visDrone.object_existence_idx] = 2 * conf_diff
+
+                        # classification loss
+                        pred_class = prediction[B * 5:]  # [C] array
+                        target_class = target[B * 5:]
+                        class_diff = pred_class - target_class
+                        loss += np.sum(class_diff ** 2)
+                        grad_A[i, row, col, B * 5:] = 2 * class_diff
+
+        mean_loss = loss / (m * S * S * C)
+        return mean_loss, grad_A
 
     def predict(self, images: np.ndarray):
         """
@@ -194,7 +285,7 @@ class YOLOActorPhoto():
             images (np.ndarray): images to predict the bounding boxes for - matrix of shape (m, height, width, num_channels), represents a batch of m images
 
         Returns:
-            np.ndarray: predicted bounding boxes - matrix of shape (m, S, S, B, 5), represents a batch of m images. Each box is [x, y, w, h, class]
+            boxes(np.ndarray): predicted bounding boxes - matrix of shape (m, S, S, B, 5), represents a batch of m images. Each box is [x, y, w, h, class]
         """
         model_output = self.model.forward(images)
 
