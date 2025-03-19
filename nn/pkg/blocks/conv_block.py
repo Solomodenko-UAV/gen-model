@@ -3,30 +3,35 @@ import numpy as np
 from nn.pkg.activations import activations
 from nn.pkg.layers.conv.layer import Convolution
 from nn.pkg.layers.maxpool.layer import MaxPool
+import helper.helper as helper
 
-filter_size = 3
+conv_filter_size = 3
+conv_stride = 1
+conv_padding = 1
+maxpool_stride = 2
+maxpool_filter_size = 2
 
 class ConvBlock:
     def __init__(self, first_layer_num_of_filters: int, second_layer_num_of_filters: int, input_channels: int):
         self.conv1 = Convolution(
             input_channels=input_channels,
-            filter_size=filter_size,
+            filter_size=conv_filter_size,
             num_filters=first_layer_num_of_filters,
-            stride=1,
-            padding=1,
+            stride=conv_stride,
+            padding=conv_stride,
         )
 
         self.conv2 = Convolution(
             input_channels=first_layer_num_of_filters,
-            filter_size=filter_size,
+            filter_size=conv_filter_size,
             num_filters=second_layer_num_of_filters,
-            stride=1,
-            padding=1,
+            stride=conv_stride,
+            padding=conv_stride,
         )
 
         self.maxpool = MaxPool(
-            pool_size=2,
-            stride=2,
+            pool_size=maxpool_filter_size,
+            stride=maxpool_stride,
         )
         
     def forward(self, X: np.ndarray):
@@ -70,3 +75,11 @@ class ConvBlock:
         dA = self.conv1.convolve_backward(dZ_conv1, learning_rate)
         
         return dA
+    
+    
+    def calc_output_dims(self, image_wh: tuple):
+        conv1_wh = helper.calc_conv_layer_out_dim(image_wh, padding=1, kernel_size=conv_filter_size, stride=1)
+        conv2_wh = helper.calc_conv_layer_out_dim(conv1_wh, padding=1, kernel_size=conv_filter_size, stride=1)
+        maxpool_wh = helper.calc_conv_layer_out_dim(conv2_wh, padding=0, kernel_size=maxpool_filter_size, stride=maxpool_stride)
+        
+        return maxpool_wh

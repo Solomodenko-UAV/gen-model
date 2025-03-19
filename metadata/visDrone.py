@@ -2,7 +2,8 @@ top_left_x_idx = 0
 top_left_y_idx = 1
 width_idx = 2
 height_idx = 3
-category_idx = 4
+object_existence_idx = 4
+category_idx = 5
 
 categories = {
     1: 'pedestrian',

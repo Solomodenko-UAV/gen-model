@@ -1,7 +1,8 @@
 import numpy as np
 
+# numerically stable softmax
 def sigmoid(x):
-    return 1 / (1 + np.exp(-x))
+    return 0.5 * (1 + np.tanh(x / 2))
 
 def sigmoid_derivative(sigmoid_x):
     return sigmoid_x * (1 - sigmoid_x)

@@ -160,3 +160,4 @@ class Convolution:
         self.biases -= db * learning_rate
 
         return dX
+
