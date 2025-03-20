@@ -8,9 +8,10 @@ from nn.pkg.layers.yolo_output.layer import YoloOutput
 
 
 class TinysimmoYOLOModel:
-    def __init__(self, 
-                 model_path: str, 
-                 S: int, B: int, C: int,):
+    def __init__(self,
+                 model_path: str,
+                 S: int, B: int, C: int,
+                 ):
         """
         Creates a new instance of the model
 
@@ -25,23 +26,26 @@ class TinysimmoYOLOModel:
         self.B = B
         self.C = C
 
-    def create_new_model(self, image_size: tuple = (88, 88)):
+    def create_new_model(self,
+                         image_size: tuple = (88, 88),
+                         conv_l2_lambda=0.0001,
+                         fc_l2_lambda=0.0001,
+                         clip_value=5.0,
+                         conv_momentum=0.8
+                         ):
         self.conv_blocks = [
-            ConvBlock(first_layer_num_of_filters=16, second_layer_num_of_filters=16, input_channels=3),
-            ConvBlock(first_layer_num_of_filters=16, second_layer_num_of_filters=32, input_channels=16),
-            ConvBlock(first_layer_num_of_filters=32, second_layer_num_of_filters=64, input_channels=32),
-            ConvBlock(first_layer_num_of_filters=64, second_layer_num_of_filters=64, input_channels=64),
-            ConvBlock(first_layer_num_of_filters=128, second_layer_num_of_filters=128, input_channels=64),
+            ConvBlock(first_layer_num_of_filters=16, second_layer_num_of_filters=16, input_channels=3, l2_lambda=conv_l2_lambda, clip_value=clip_value, momentum=conv_momentum),
+            ConvBlock(first_layer_num_of_filters=16, second_layer_num_of_filters=32, input_channels=16, l2_lambda=conv_l2_lambda, clip_value=clip_value, momentum=conv_momentum),
+            ConvBlock(first_layer_num_of_filters=32, second_layer_num_of_filters=64, input_channels=32, l2_lambda=conv_l2_lambda, clip_value=clip_value, momentum=conv_momentum),
+            ConvBlock(first_layer_num_of_filters=64, second_layer_num_of_filters=64, input_channels=64, l2_lambda=conv_l2_lambda, clip_value=clip_value, momentum=conv_momentum),
+            ConvBlock(first_layer_num_of_filters=128, second_layer_num_of_filters=128, input_channels=64, l2_lambda=conv_l2_lambda, clip_value=clip_value, momentum=conv_momentum),
         ]
 
-        
         for block in self.conv_blocks:
             image_size = block.calc_output_dims(image_size)
-        
-        # self.fc_layer = FullyConnected(input_size=image_size[0]*image_size[1]*128, output_size=256)  # 256 is a bit more than 4*4(2*5+1)
-        self.fc_layer = FullyConnected(input_size=image_size[0]*image_size[1]*128, output_size=1700)  # TODO: rollback
-        # self.output_layer = YoloOutput(input_size=256, S=self.S, B=self.B, C=self.C)
-        self.output_layer = YoloOutput(input_size=1700, S=self.S, B=self.B, C=self.C)  # TODO: rollback
+
+        self.fc_layer = FullyConnected(input_size=image_size[0]*image_size[1]*128, output_size=256, l2_lambda=fc_l2_lambda, clip_value=clip_value)  # 256 is a bit more than 4*4(2*5+1)
+        self.output_layer = YoloOutput(input_size=256, S=self.S, B=self.B, C=self.C, l2_lambda=fc_l2_lambda, clip_value=clip_value)
 
     def forward(self, images: np.ndarray):
         """
@@ -55,15 +59,16 @@ class TinysimmoYOLOModel:
         """
         for block in self.conv_blocks:
             images = block.forward(images)
-        
+
+        # print(images)
         self.conv_output_shape = images.shape
         images = images.reshape(images.shape[0], -1)
         images = self.fc_layer.feed_forward(images)
         images = self.output_layer.feed_forward(images)
 
         return images
-    
-    def backward(self, loss:float, learning_rate: float):
+
+    def backward(self, loss: float, learning_rate: float):
         """
         Backward pass of the model
 
@@ -73,10 +78,8 @@ class TinysimmoYOLOModel:
         """
         dZ = self.output_layer.feed_backward(loss, learning_rate)
         dZ = self.fc_layer.feed_backward(dZ, learning_rate)
-        
+
         dZ = dZ.reshape(self.conv_output_shape)
 
         for block in reversed(self.conv_blocks):
             dZ = block.backward(dZ, learning_rate)
-            
-        

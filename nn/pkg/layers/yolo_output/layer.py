@@ -8,7 +8,13 @@ class YoloOutput:
     basically just FullyConnected layer, but with activation functions applied to only the specific part of output
     """
 
-    def __init__(self, input_size: int, S: int, B: int, C: int):
+    def __init__(self,
+                 input_size: int,
+                 S: int,
+                 B: int,
+                 C: int,
+                 l2_lambda=0.0001,
+                 clip_value=5.0):
         """
         creates a yolo output layer
 
@@ -29,6 +35,9 @@ class YoloOutput:
         self.weights = np.random.randn(input_size, out_dim).astype(np.float64) * std
         self.biases = np.zeros((1, out_dim), dtype=np.float64)
         self.cache = {}
+        
+        self.l2_lambda = l2_lambda
+        self.clip_value = clip_value
 
     def feed_forward(self, X: np.ndarray):
         """
@@ -36,7 +45,7 @@ class YoloOutput:
 
         Args:
             X (np.ndarray): input to the yolo output layer - matrix of shape (m, input_size), represents a batch of m images
-            
+
         Returns:
             A (np.ndarray): output of the yolo output layer - matrix of shape (m, S, S, out_per_cell), represents a batch of m images
         """
@@ -55,8 +64,15 @@ class YoloOutput:
             y_coordinate_idx = b * 5 + 1  # relative center y coordinate value index
             confidence_idx = b * 5 + 4  # confidence value index
 
-            A[:, :, :, x_coordinate_idx] = activations.sigmoid(A[:, :, :, x_coordinate_idx])
-            A[:, :, :, y_coordinate_idx] = activations.sigmoid(A[:, :, :, y_coordinate_idx])
+            grid_x = np.arange(self.S).reshape(1, self.S, 1)
+            grid_y = np.arange(self.S).reshape(1, 1, self.S)
+
+            # YOLO-style x, y transformation
+            A[:, :, :, x_coordinate_idx] = (activations.sigmoid(A[:, :, :, x_coordinate_idx]) + grid_x) / self.S  # TODO: what's the backprop for this?
+            A[:, :, :, y_coordinate_idx] = (activations.sigmoid(A[:, :, :, y_coordinate_idx]) + grid_y) / self.S
+
+            # A[:, :, :, x_coordinate_idx] = activations.sigmoid(A[:, :, :, x_coordinate_idx])
+            # A[:, :, :, y_coordinate_idx] = activations.sigmoid(A[:, :, :, y_coordinate_idx])
             A[:, :, :, confidence_idx] = activations.sigmoid(A[:, :, :, confidence_idx])
             # leave weight and height (indices b*5+2 and b*5+3) as is
 
@@ -72,7 +88,7 @@ class YoloOutput:
         Args:
             dZ (np.ndarray): gradient of the cost with respect to the output of the yolo output layer - matrix of shape (m, S, S, out_per_cell), represents a batch of m images
             learning_rate (float): learning rate to be used for updating the weights and biases
-            
+
         Returns:
             dX(np.ndarray): gradient of the cost with respect to the input of the yolo output layer - matrix of shape (m, input_size), represents a batch of m images
         """
@@ -95,9 +111,14 @@ class YoloOutput:
             ys = Z[:, :, :, y_coordinate_idx]
             cs = Z[:, :, :, confidence_idx]
 
-            dX_pre[:, :, :, x_coordinate_idx] *= activations.sigmoid_derivative(xs)
-            dX_pre[:, :, :, y_coordinate_idx] *= activations.sigmoid_derivative(ys)
-            dX_pre[:, :, :, confidence_idx] *= activations.sigmoid_derivative(cs)
+            sigmoid_x = activations.sigmoid(xs)
+            dX_pre[:, :, :, x_coordinate_idx] *= (sigmoid_x * (1 - sigmoid_x)) / self.S
+            sigmoid_y = activations.sigmoid(ys)
+            dX_pre[:, :, :, y_coordinate_idx] *= (sigmoid_y * (1 - sigmoid_y)) / self.S
+
+            # dX_pre[:, :, :, x_coordinate_idx] *= activations.sigmoid_derivative(xs) + 1e-6
+            # dX_pre[:, :, :, y_coordinate_idx] *= activations.sigmoid_derivative(ys) + 1e-6
+            dX_pre[:, :, :, confidence_idx] *= activations.sigmoid_derivative(cs) + 1e-6
             # leave weight and height (indices b*5+2 and b*5+3) as is
 
         softmax_output = Z[:, :, :, self.B * 5:]
@@ -106,12 +127,15 @@ class YoloOutput:
 
         dX_pre = dX_pre.reshape(m, self.S * self.S * self.out_per_cell)
 
-        dW = np.dot(X.T, dX_pre) / m # shape (input_size, out_dim)
-        db = np.sum(dX_pre, axis=0, keepdims=True) / m # shape (1, out_dim)
-        
-        dX = np.dot(dX_pre, self.weights.T) # shape (m, input_size)
-        
-        self.weights -= dW * learning_rate
+        dW = np.dot(X.T, dX_pre) / m  # shape (input_size, out_dim)
+        db = np.sum(dX_pre, axis=0, keepdims=True) / m  # shape (1, out_dim)
+
+        dX = np.dot(dX_pre, self.weights.T)  # shape (m, input_size)
+
+        dW = np.clip(dW, -self.clip_value, self.clip_value)
+        db = np.clip(db, -self.clip_value, self.clip_value)
+
+        self.weights -= learning_rate * (dW + self.l2_lambda * self.weights) # L2 regularization
         self.biases -= db * learning_rate
-        
+
         return dX

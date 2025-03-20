@@ -8,7 +8,11 @@ class Convolution:
                  filter_size: int,
                  num_filters: int,
                  stride: int,
-                 padding: int):
+                 padding: int,
+                 l2_lambda: float = 0.0001,
+                 clip_value: float = 5.0,
+                 momentum=0.8,
+                 ):
         """
         creates a convolution layer
 
@@ -35,12 +39,22 @@ class Convolution:
         if num_filters < 1:
             raise ValueError("number of filters should be greater than 0")
 
-        std = np.sqrt(2 / (input_channels * filter_size**2)).astype(np.float64) # Xavier for ReLU
+        std = np.sqrt(2 / (input_channels * filter_size**2)).astype(np.float64)  # Xavier for ReLU
         self.filters = np.random.randn(filter_size, filter_size, input_channels, num_filters).astype(np.float64) * std
         self.biases = np.zeros((1, 1, 1, num_filters)).astype(np.float64)
 
         self.stride = stride
         self.padding = padding
+
+        self.l2_lambda = l2_lambda
+        self.clip_value = clip_value
+        self.momentum = momentum
+        self.eps = 1e-5
+        self.gamma = 1  # activations remain unaffected at the start
+        self.beta = 0  # no initial shift
+
+        self.running_mean = np.zeros((1, 1, 1, self.filters.shape[3]))  # initial activations are assumed to be centered around zero
+        self.running_variance = np.ones((1, 1, 1, self.filters.shape[3]))  # variance shouldn't start at 0 (to avoid division by zero).
 
     def zero_pad(self, X: np.ndarray):
         """
@@ -105,7 +119,9 @@ class Convolution:
                     for c in range(num_filters):
                         Z[i, h, w, c] = self.convolve_single_step(part_to_convolve, c)
 
-        self.cache = X
+        Z, batch_cache = self._normalize_forward(Z)
+
+        self.cache = (X, batch_cache)
 
         return Z
 
@@ -121,7 +137,7 @@ class Convolution:
             dX (np.ndarray): gradient of the input (X), matrix shape (m, height, width, input_channels)
         """
 
-        X = self.cache
+        (X, batch_cache) = self.cache
         (m, output_height, output_width, num_filters) = dZ.shape
 
         filter_size = self.filters.shape[0]
@@ -132,6 +148,8 @@ class Convolution:
 
         X_padded = self.zero_pad(X)
         dX_padded = self.zero_pad(dX)
+
+        dZ, dgamma, dbeta = self._normalize_backward(dZ)
 
         for i in range(m):
             x_padded = X_padded[i]
@@ -156,8 +174,58 @@ class Convolution:
             else:
                 dX[i, :, :, :] = dx_padded[self.padding:-self.padding, self.padding:-self.padding, :]
 
-        self.filters -= dW * learning_rate
+        dW = np.clip(dW, -self.clip_value, self.clip_value)
+        db = np.clip(db, -self.clip_value, self.clip_value)
+
+        self.filters -= learning_rate * (dW + self.l2_lambda * self.filters)  # L2 regularization
         self.biases -= db * learning_rate
+
+        self.gamma -= learning_rate * dgamma
+        self.beta -= learning_rate * dbeta
 
         return dX
 
+    def _normalize_forward(self, Z: np.ndarray):
+        """
+        batch normalization
+
+        Args:
+            X (np.ndarray): input to the convolution layer - matrix of shape (m, height, width, num_filters)
+
+        Returns:
+            np.ndarray: normalized input
+        """
+
+        mean = np.mean(Z, axis=(0, 1, 2), keepdims=True)
+        variance = np.var(Z, axis=(0, 1, 2), keepdims=True)
+
+        Z_norm = (Z - mean) / np.sqrt(variance + self.eps)
+
+        out = self.gamma * Z_norm + self.beta
+
+        self.running_mean = self.momentum * self.running_mean + (1 - self.momentum) * mean
+        self.running_variance = self.momentum * self.running_variance + (1 - self.momentum) * variance
+
+        cache = (Z, Z_norm, mean, variance)
+
+        return out, cache
+
+    def _normalize_backward(self, dZ):
+        (Z, Z_norm, mean, variance) = self.cache[1]
+        m = Z.shape[0]
+
+        # Gradients scale (gamma) and shift (beta)
+        dgamma = np.sum(dZ * Z_norm, axis=0, keepdims=True)
+        dbeta = np.sum(dZ, axis=0, keepdims=True)
+
+        dZ_norm = dZ * self.gamma
+
+        # Gradient of variance
+        dvar = np.sum(dZ_norm * (Z - mean) * -0.5 * np.power(variance + self.eps, -1.5), axis=0, keepdims=True)
+
+        # Gradient of mean
+        dmean = np.sum(dZ_norm * -1 / np.sqrt(variance + self.eps), axis=0, keepdims=True) + dvar * np.mean(-2 * (Z - mean), axis=0, keepdims=True)
+
+        dX = dZ_norm / np.sqrt(variance + self.eps) + dvar * 2 * (Z - mean) / m + dmean / m
+
+        return dX, dgamma, dbeta

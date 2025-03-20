@@ -105,7 +105,7 @@ class YOLOActorPhoto():
         original_images, resized_images, annotations = self.load_data()
         losses = []
         for i in range(epochs):
-            Y = self.model.forward[128, 128](resized_images)
+            Y = self.model.forward(resized_images)
             loss = self.train_on_multiple_images(
                 Y=Y,
                 Y_hat=annotations,
@@ -146,9 +146,8 @@ class YOLOActorPhoto():
         for i in range(len(Y_hat)):
             Y_target[i] = self._cook_annotations(Y_hat[i], original_img_shape, self.model_input_img_res)
 
-        # loss, grad_A = self._calc_loss_and_gradient(Y, Y_target)
-        loss, grad_A = self._calc_loss_and_gradient[128, 128](Y, Y_target)
-        self.model.backward[128, 128](grad_A, learning_rate)
+        loss, grad_A = self._calc_loss_and_gradient(Y, Y_target)
+        self.model.backward(grad_A, learning_rate)
 
         return loss
 

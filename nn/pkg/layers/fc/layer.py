@@ -1,7 +1,12 @@
 import numpy as np
 
 class FullyConnected :
-    def __init__(self, input_size: int, output_size: int):
+    def __init__(self, 
+                 input_size: int, 
+                 output_size: int,
+                 l2_lambda=0.0001,
+                 clip_value=5.0
+                 ):
         """
         creates a fully connected layer
 
@@ -12,6 +17,8 @@ class FullyConnected :
         std = np.sqrt(2 / input_size).astype(np.float64) # He init for ReLU
         self.weights = np.random.randn(input_size, output_size).astype(np.float64) * std
         self.biases = np.zeros((1, output_size), dtype=np.float64)
+        self.clip_value = clip_value
+        self.l2_lambda = l2_lambda
         
     def feed_forward(self, X: np.ndarray):
         """
@@ -47,7 +54,10 @@ class FullyConnected :
         
         dX = np.dot(dZ, self.weights.T)
         
-        self.weights -= dW * learning_rate
+        dW = np.clip(dW, -self.clip_value, self.clip_value)
+        db = np.clip(db, -self.clip_value, self.clip_value)
+
+        self.weights -= learning_rate * (dW + self.l2_lambda * self.weights)  # L2 regularization
         self.biases -= db * learning_rate
         
         return dX

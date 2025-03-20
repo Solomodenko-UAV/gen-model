@@ -1,6 +1,6 @@
 import numpy as np
 
-# numerically stable softmax
+# numerically stable sigmoid
 def sigmoid(x):
     return 0.5 * (1 + np.tanh(x / 2))
 
@@ -40,8 +40,9 @@ def vectorized_softmax_derivative(s: np.ndarray, grad_soft: np.ndarray):
     return s * (grad_soft - dot)
 
 
+# leaky relu
 def relu(x):
-    return np.maximum(0, x)
+    return np.maximum(0.01 * x, x)
 
-def relu_derivative(x):
-    return np.where(x > 0, 1, 0)
+def relu_derivative(x, alpha=0.01):
+    return np.where(x > 0, 1, alpha)
