@@ -83,3 +83,26 @@ class TinysimmoYOLOModel:
 
         for block in reversed(self.conv_blocks):
             dZ = block.backward(dZ, learning_rate)
+
+    def save_model(self):
+        """
+        Saves the model to the disk
+        """
+        params = {}
+        for i, block in enumerate(self.conv_blocks):
+            block.get_params(params, f'conv_block_{i}')
+
+        self.fc_layer.get_params(params, 'fc_layer')
+        self.output_layer.get_params(params, 'output_layer')
+        np.savez(self.model_path, **params)
+
+    def load_model(self):
+        """
+        Loads the model from the disk
+        """
+        params = np.load(self.model_path + ".npz", allow_pickle=True)
+        for i, block in enumerate(self.conv_blocks):
+            block.set_params(params, f'conv_block_{i}')
+
+        self.fc_layer.set_params(params, 'fc_layer')
+        self.output_layer.set_params(params, 'output_layer')

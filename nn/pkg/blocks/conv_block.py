@@ -21,7 +21,7 @@ class ConvBlock:
                  clip_value: float = 5.0,
                  momentum=0.8
                  ):
-        
+
         self.conv1 = Convolution(
             input_channels=input_channels,
             filter_size=conv_filter_size,
@@ -97,3 +97,13 @@ class ConvBlock:
         maxpool_wh = helper.calc_conv_layer_out_dim(conv2_wh, padding=0, kernel_size=maxpool_filter_size, stride=maxpool_stride)
 
         return maxpool_wh
+
+    def get_params(self, params: dict, key: str):
+        self.conv1.get_params(params, f'{key}_conv1_params')
+        self.conv2.get_params(params, f'{key}_conv2_params')
+        self.maxpool.get_params(params, f'{key}_pool_params')
+
+    def set_params(self, params: dict, key: str):
+        self.conv1.set_params(params, f'{key}_conv1_params')
+        self.conv2.set_params(params, f'{key}_conv2_params')
+        self.maxpool.set_params(params, f'{key}_pool_params')

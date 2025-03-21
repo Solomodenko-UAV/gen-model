@@ -6,14 +6,14 @@ import platform
 
 
 # model = TinysimmoYOLOModel(model_path='model', S=4, B=2, C=1)
-model = TinysimmoYOLOModel(model_path='model', S=4, B=2, C=10)  # TODO: rollback
+model = TinysimmoYOLOModel(model_path='./model', S=4, B=2, C=10)  # TODO: rollback
 
 model.create_new_model(
     image_size=(88, 88),
     conv_l2_lambda=0.0001,
     fc_l2_lambda=0.0001,
     clip_value=5.0,
-    conv_momentum=0.8
+    conv_momentum=0.8,
 )
 
 if platform.system() == "Windows":
@@ -30,8 +30,11 @@ actor = YOLOActorPhoto(
     annotation_folder=annotation_folder,
     model_input_img_res=(88, 88),
     model=model,
-    mini_batch_size=4
+    mini_batch_size=1
 )
 
 # actor.load_data()
-actor.run_training_loop(epochs=10, learning_rate=0.001)
+# model.load_model()
+actor.run_training_loop(epochs=5, learning_rate=0.001)
+model.save_model()
+

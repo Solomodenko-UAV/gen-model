@@ -35,7 +35,7 @@ class YoloOutput:
         self.weights = np.random.randn(input_size, out_dim).astype(np.float64) * std
         self.biases = np.zeros((1, out_dim), dtype=np.float64)
         self.cache = {}
-        
+
         self.l2_lambda = l2_lambda
         self.clip_value = clip_value
 
@@ -135,7 +135,27 @@ class YoloOutput:
         dW = np.clip(dW, -self.clip_value, self.clip_value)
         db = np.clip(db, -self.clip_value, self.clip_value)
 
-        self.weights -= learning_rate * (dW + self.l2_lambda * self.weights) # L2 regularization
+        self.weights -= learning_rate * (dW + self.l2_lambda * self.weights)  # L2 regularization
         self.biases -= db * learning_rate
 
         return dX
+
+    def get_params(self, params: dict, key: str):
+        params[f'{key}_weights'] = self.weights
+        params[f'{key}_biases'] = self.biases
+        params[f'{key}_l2_lambda'] = self.l2_lambda
+        params[f'{key}_clip_value'] = self.clip_value
+        params[f'{key}_S'] = self.S
+        params[f'{key}_B'] = self.B
+        params[f'{key}_C'] = self.C
+        params[f'{key}_out_per_cell'] = self.out_per_cell
+
+    def set_params(self, params: dict, key: str):
+        self.weights = params[f'{key}_weights']
+        self.biases = params[f'{key}_biases']
+        self.l2_lambda = params[f'{key}_l2_lambda']
+        self.clip_value = params[f'{key}_clip_value']
+        self.S = params[f'{key}_S']
+        self.B = params[f'{key}_B']
+        self.C = params[f'{key}_C']
+        self.out_per_cell = params[f'{key}_out_per_cell']

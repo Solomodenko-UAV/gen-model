@@ -22,6 +22,7 @@ class YOLOActorPhoto():
         self.model_input_img_res = model_input_img_res
         self.model = model
         self.mini_batch_size = mini_batch_size
+        self.data_idx = 0
 
     def func_for_tests(self):
         entries = os.listdir(self.data_folder)
@@ -77,7 +78,7 @@ class YOLOActorPhoto():
                     Images are of shape (m, height, width, num_channels) and 
                     annotations are of shape (m, n, 8)
         """
-        entries = os.listdir(self.data_folder)
+        entries = os.listdir(self.data_folder)[self.data_idx:self.data_idx + self.mini_batch_size]
         img_files = {}
         annotation_files = {}
         for entry in entries:
@@ -99,12 +100,14 @@ class YOLOActorPhoto():
             annotations_list[i] = np.array(annotations).astype(np.float64)
             i += 1
 
+        self.data_idx += self.mini_batch_size
+
         return np.array(I).astype(np.float64), IR, annotations_list
 
     def run_training_loop(self, epochs=10, learning_rate=0.01):
-        original_images, resized_images, annotations = self.load_data()
         losses = []
         for i in range(epochs):
+            original_images, resized_images, annotations = self.load_data()
             Y = self.model.forward(resized_images)
             loss = self.train_on_multiple_images(
                 Y=Y,
@@ -214,7 +217,6 @@ class YOLOActorPhoto():
             Y_target[cell_y, cell_x, self.model.B * 5:] = class_targets[i]
 
         return Y_target
-
 
     def _calc_loss_and_gradient(self, A: np.ndarray, Y_target: np.ndarray):
         """

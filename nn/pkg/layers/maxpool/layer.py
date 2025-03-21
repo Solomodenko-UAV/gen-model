@@ -94,3 +94,13 @@ class MaxPool:
                         dX[i, vert_start:vert_end, horiz_start:horiz_end, c] += mask * dZ[i, h, w, c]
 
         return dX
+
+    def get_params(self, params: dict, key: str):
+        params[f'{key}_pool_size'] = self.pool_size
+        params[f'{key}_stride'] = self.stride
+
+        return params
+    
+    def set_params(self, params: dict, key: str):
+        self.pool_size = params[f'{key}_pool_size']
+        self.stride = params[f'{key}_stride']

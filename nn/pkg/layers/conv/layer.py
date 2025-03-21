@@ -50,8 +50,8 @@ class Convolution:
         self.clip_value = clip_value
         self.momentum = momentum
         self.eps = 1e-5
-        self.gamma = 1  # activations remain unaffected at the start
-        self.beta = 0  # no initial shift
+        self.gamma = np.ones((1, 1, 1, num_filters)).astype(np.float64)  # activations remain unaffected at the start
+        self.beta = np.zeros((1, 1, 1, num_filters)).astype(np.float64) # no initial shift
 
         self.running_mean = np.zeros((1, 1, 1, self.filters.shape[3]))  # initial activations are assumed to be centered around zero
         self.running_variance = np.ones((1, 1, 1, self.filters.shape[3]))  # variance shouldn't start at 0 (to avoid division by zero).
@@ -215,8 +215,8 @@ class Convolution:
         m = Z.shape[0]
 
         # Gradients scale (gamma) and shift (beta)
-        dgamma = np.sum(dZ * Z_norm, axis=0, keepdims=True)
-        dbeta = np.sum(dZ, axis=0, keepdims=True)
+        dgamma = np.sum(dZ * Z_norm, axis=(0, 1, 2), keepdims=True)
+        dbeta = np.sum(dZ, axis=(0, 1, 2), keepdims=True)
 
         dZ_norm = dZ * self.gamma
 
@@ -229,3 +229,31 @@ class Convolution:
         dX = dZ_norm / np.sqrt(variance + self.eps) + dvar * 2 * (Z - mean) / m + dmean / m
 
         return dX, dgamma, dbeta
+
+    def get_params(self, params: dict, key: str):
+        params[f'{key}_filters'] = self.filters
+        params[f'{key}_biases'] = self.biases
+        params[f'{key}_stride'] = self.stride
+        params[f'{key}_padding'] = self.padding
+        params[f'{key}_l2_lambda'] = self.l2_lambda
+        params[f'{key}_clip_value'] = self.clip_value
+        params[f'{key}_momentum'] = self.momentum
+        params[f'{key}_gamma'] = self.gamma
+        params[f'{key}_beta'] = self.beta
+        params[f'{key}_eps'] = self.eps
+        params[f'{key}_running_mean'] = self.running_mean
+        params[f'{key}_running_variance'] = self.running_variance
+
+    def set_params(self, params: dict, key: str):
+        self.filters = params[f'{key}_filters']
+        self.biases = params[f'{key}_biases']
+        self.stride = params[f'{key}_stride']
+        self.padding = params[f'{key}_padding']
+        self.l2_lambda = params[f'{key}_l2_lambda']
+        self.clip_value = params[f'{key}_clip_value']
+        self.momentum = params[f'{key}_momentum']
+        self.gamma = params[f'{key}_gamma']
+        self.beta = params[f'{key}_beta']
+        self.eps = params[f'{key}_eps']
+        self.running_mean = params[f'{key}_running_mean']
+        self.running_variance = params[f'{key}_running_variance']
