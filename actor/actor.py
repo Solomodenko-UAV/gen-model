@@ -24,7 +24,7 @@ class YOLOActorPhoto():
         self.mini_batch_size = mini_batch_size
         self.data_idx = 0
 
-    def func_for_tests(self):
+    def func_for_tests(self, show_model_boxes=False, evaluate=False):
         entries = os.listdir(self.data_folder)
         img_files = {}
         annotation_files = {}
@@ -50,32 +50,49 @@ class YOLOActorPhoto():
 
         #     plt.axis('off')
         #     plt.show()
+
+        # show model output
             for file_name, img_path in img_files.items():
                 img, img_resized = self._prepare_single_image(img_path)
                 images = img_resized.reshape(1, *img_resized.shape)
-                predicted_boxes = self.predict(images)
 
-                boxes_coordinates = predicted_boxes.reshape(predicted_boxes.shape[0], -1, predicted_boxes.shape[-1])
+                if show_model_boxes:
+                    boxes_data = self.predict(images)
+                    fig, ax = plt.subplots(1)
+                    ax.imshow(img_resized)
+                    for i in range(len(boxes_data)):
+                        boxes_per_image = boxes_data[i]
+                        for box in boxes_per_image:
+                            x, y, w, h, obj_class, score = box
+                            rect = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='r', facecolor='none')
+                            ax.add_patch(rect)
 
-                fig, ax = plt.subplots(1)
-                ax.imshow(img)
-                for i in range(len(predicted_boxes)):
-                    boxes_per_image = boxes_coordinates[i]
-                    for box in boxes_per_image:
-                        x, y, w, h, obj_class = box
-                        rect = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='r', facecolor='none')
-                        ax.add_patch(rect)
+                    # plt.axis('off')
+                    plt.show()
 
-                # plt.axis('off')
-                plt.show()
+                if evaluate:
+                    annotations = _extract_visDrone_annotations(annotation_files[file_name])
+                    annotations_resized = _downscale_annotation(annotations, img.shape[0] // img_resized.shape[0], img.shape[1] // img_resized.shape[1])
+
+                    annotations = [annotations]
+                    annotations_resized = [annotations_resized]
+                    mAp, aps = self.evaluate_model(images, annotations_resized)
+                    print("resized annotations")
+                    print(f"mAP: {mAp}, APs: {aps}")
+                    print("--------------")
+
+                    mAp, aps = self.evaluate_model(images, annotations)
+                    print("NOT resized annotations")
+                    print(f"mAP: {mAp}, APs: {aps}")
+                    print("--------------")
 
     def load_data(self):
         """
         Load the data from the data folder
 
         Returns:
-            tuple: tuple containing the images and the annotations. 
-                    Images are of shape (m, height, width, num_channels) and 
+            tuple: tuple containing the images and the annotations.
+                    Images are of shape (m, height, width, num_channels) and
                     annotations are of shape (m, n, 8)
         """
         entries = os.listdir(self.data_folder)[self.data_idx:self.data_idx + self.mini_batch_size]
@@ -233,7 +250,7 @@ class YOLOActorPhoto():
         loss = 0.0
         grad_A = np.zeros_like(A)
 
-        # Constants for loss weighting (set these as needed)
+        # Constants for loss weighting
         lambda_coord = 5.0
         lambda_noobj = 0.5
 
@@ -302,7 +319,7 @@ class YOLOActorPhoto():
             images (np.ndarray): images to predict the bounding boxes for - matrix of shape (m, height, width, num_channels), represents a batch of m images
 
         Returns:
-            boxes(np.ndarray): predicted bounding boxes - matrix of shape (m, S, S, B, 5), represents a batch of m images. Each box is [x, y, w, h, class]
+            boxes(np.ndarray): predicted bounding boxes - matrix of shape (m, S * S * B, 6), represents a batch of m images. Each box is [x, y, w, h, class, score]
         """
         model_output = self.model.forward(images)
 
@@ -316,7 +333,7 @@ class YOLOActorPhoto():
         predicted_class_indices = np.argmax(classes_probs, axis=-1)  # shape (m, S, S)
         predicted_class_probabilities = np.max(classes_probs, axis=-1)  # shape (m, S, S)
 
-        boxes = np.zeros((m, S, S, B, 5))
+        boxes = np.zeros((m, S, S, B, 6))
 
         cell_width = self.model_input_img_res[0] // S
         cell_height = self.model_input_img_res[1] // S
@@ -338,10 +355,30 @@ class YOLOActorPhoto():
 
                         obj_class_probability = predicted_class_probabilities[i, row, col]
                         obj_class = predicted_class_indices[i, row, col]
+                        score = obj_class_probability * confidence
 
-                        boxes[i, row, col, b] = [x1, y1, w_abs, h_abs, obj_class]
+                        boxes[i, row, col, b] = [x1, y1, w_abs, h_abs, obj_class, score]
 
-        return boxes
+        return boxes.reshape(m, -1, boxes.shape[-1])
+
+    def evaluate_model(self, images: np.ndarray, annotations: list, iou_threshold: float = 0.5, score_threshold: float = 0.5):
+        """
+        Evaluate the model
+
+        Args:
+            images (np.ndarray): images to predict the bounding boxes for - matrix of shape (m, height, width, num_channels), represents a batch of m images
+            annotations (np.ndarray): true values - matrix of shape (m, n, 8), represents a batch of m annotations
+
+        Returns:
+            float: mean average precision
+            dict: average precision per class
+        """
+        boxes_pred = self.predict(images)
+        boxes_pred = _non_max_suppression(boxes_pred, iou_threshold=iou_threshold, score_threshold=score_threshold)
+
+        per_class_results = _calc_precision_recall(annotations, boxes_pred, iou_threshold)
+        mAP, ap_per_class = _calculate_mean_average_precision(per_class_results)
+        return mAP, ap_per_class
 
     def _prepare_single_image(self, img_path: str):
         """
@@ -423,3 +460,203 @@ def _extract_visDrone_annotations(file_path: str):
         annotations.append(values)
 
     return annotations
+
+
+def _non_max_suppression(boxes: np.ndarray, iou_threshold: float = 0.5, score_threshold=0.5):
+    """
+    Perform non-max suppression on the boxes
+
+    Args:
+        boxes (np.ndarray): matrix of shape (m, S * S * B, 6), represents a batch of m images. Each box is [x, y, w, h, class, score]
+        iou_threshold (float): threshold for the intersection over union
+
+    Returns:
+        np.ndarray: matrix of shape (m, S * S * B, 6), represents a batch of m images. Each box is [x, y, w, h, class, score]
+    """
+    m = boxes.shape[0]
+    final_boxes = [[] for _ in range(m)]
+
+    filtered_boxes = []
+    for i in range(boxes.shape[0]):  # iterate over the batch
+        # Apply the mask for each image individually
+        mask = boxes[i, :, 5] > score_threshold
+        filtered_boxes.append(boxes[i][mask])
+
+    boxes = np.array(filtered_boxes, dtype=np.float64)
+
+    classes = np.unique(boxes[:, :, 4])
+
+    for i in range(m):
+        single_image_boxes = boxes[i]  # (S * S * B, 6)
+
+        for cls in classes:
+            this_class_boxes = single_image_boxes[single_image_boxes[:, 4] == cls]
+            
+            # sort by score
+            indices = np.argsort(this_class_boxes[:, 5])[::-1]
+            this_class_boxes = this_class_boxes[indices]
+
+            boxes_to_keep = []
+            while len(this_class_boxes) > 0:
+                current_box = this_class_boxes[0]  # box with the highest score. Shape (6,)
+                boxes_to_keep.append(current_box)
+
+                remaining_boxes_this_class = []
+                for box in this_class_boxes[1:]:
+                    if _compute_iou(current_box[:4], box[:4]) < iou_threshold:  # if not the same object
+                        remaining_boxes_this_class.append(box)  # remain this box in the pool
+
+                this_class_boxes = np.array(remaining_boxes_this_class)
+
+            final_boxes[i].extend(boxes_to_keep)  # write this class boxes to the final list
+
+    return np.array(final_boxes)
+
+
+def _compute_iou(boxA: np.ndarray, boxB: np.ndarray):
+    """
+    Compute the intersection over union of the two boxes
+
+    Args:
+        boxA (np.ndarray): matrix of shape (4,), represents the coordinates of the top-left and bottom-right corners of the box
+        boxB (np.ndarray): matrix of shape (4,), represents the coordinates of the top-left and bottom-right corners of the box
+
+    Returns:
+        float: intersection over union of the two boxes
+    """
+    x1_inner = max(boxA[0], boxB[0])
+    y1_inner = max(boxA[1], boxB[1])
+    x2_inner = min(boxA[2], boxB[2])
+    y2_inner = min(boxA[3], boxB[3])
+    inner_area = max(0, x2_inner - x1_inner) * max(0, y2_inner - y1_inner)
+
+    if inner_area == 0:
+        return 0
+
+    boxA_area = (boxA[2] - boxA[0]) * (boxA[3] - boxA[1])
+    boxB_area = (boxB[2] - boxB[0]) * (boxB[3] - boxB[1])
+
+    return inner_area / (boxA_area + boxB_area - inner_area)
+
+
+def _calc_precision_recall(true_boxes: list, pred_boxes: np.ndarray, iou_threshold: float = 0.5):
+    """
+    Calculate the precision and recall
+
+    Args:
+        true_boxes (list): list of true boxes - matrix of shape (m, n, 8), represents a batch of m annotations
+        pred_boxes (np.ndarray): predicted boxes - matrix of shape (m, S * S * B, 6), represents a batch of m images. Each box is [x, y, w, h, class, score]
+        iou_threshold (float, optional): iou threshold. Defaults to 0.5.
+    """
+    # determine all unique classes
+    classes = set()
+    for image_boxes in true_boxes:
+        for box in image_boxes:
+            classes.add(box[visDrone.category_idx])
+
+    for image_boxes in pred_boxes:
+        for box in image_boxes:
+            classes.add(box[4])
+
+    classes = list(classes)
+    per_class_results = {}
+
+    m = len(true_boxes)
+
+    for cls in classes:
+        this_class_tp_list = []
+        this_class_fp_list = []
+        this_class_total_true_boxes = 0
+
+        for i in range(m):
+            this_image_and_class_true_boxes = [box for box in true_boxes[i] if box[4] == cls]
+            this_image_and_class_pred_boxes = [box for box in pred_boxes[i] if box[visDrone.category_idx] == cls]
+
+            this_class_total_true_boxes += len(this_image_and_class_true_boxes)
+
+            # sort by score in descending order
+            this_image_and_class_pred_boxes = sorted(this_image_and_class_pred_boxes, key=lambda x: x[5], reverse=True)
+
+            this_image_and_class_true_boxes_detected = [False] * len(this_image_and_class_true_boxes)
+
+            for this_image_and_class_pred_box in this_image_and_class_pred_boxes:
+                pred_box_coords = this_image_and_class_pred_box[:4]
+
+                max_iou = 0.
+                max_iou_idx = -1
+
+                for idx, true_box in enumerate(this_image_and_class_true_boxes):
+                    true_box_x1 = true_box[visDrone.top_left_x_idx]
+                    true_box_y1 = true_box[visDrone.top_left_y_idx]
+                    true_box_x2 = true_box[visDrone.top_left_x_idx] + true_box[visDrone.width_idx]
+                    true_box_y2 = true_box[visDrone.top_left_y_idx] + true_box[visDrone.height_idx]
+                    true_box = np.ndarray([true_box_x1, true_box_y1, true_box_x2, true_box_y2])
+
+                    iou = _compute_iou(pred_box_coords, true_box)
+                    if iou > max_iou:
+                        max_iou = iou
+                        max_iou_idx = idx
+
+                if max_iou <= iou_threshold or this_image_and_class_true_boxes_detected[max_iou_idx]:  # duplicate detection
+                    this_class_tp_list.append(0)
+                    this_class_fp_list.append(1)
+                    continue
+
+                this_class_tp_list.append(1)
+                this_class_fp_list.append(0)
+                this_image_and_class_true_boxes_detected[max_iou_idx] = True
+
+        cum_tp = np.cumsum(np.array(this_class_tp_list))
+        cum_fp = np.cumsum(np.array(this_class_fp_list))
+
+        recall = cum_tp / (this_class_total_true_boxes + 1e-6)
+        precision = cum_tp / (cum_tp + cum_fp)
+
+        per_class_results[cls] = (recall, precision)
+
+    return per_class_results
+
+
+def _calculate_average_precision(recall: np.ndarray, precision: np.ndarray):
+    """
+    Calculate the average precision
+
+    Args:
+        recall (np.ndarray): array of recall values
+        precision (np.ndarray): array of precision values
+
+    Returns:
+        float: average precision
+    """
+
+    mrecall = np.concatenate(([0.], recall, [1.]))
+    mprecision = np.concatenate(([0.], precision, [0.]))
+
+    for i in range(len(mprecision) - 2, -1, -1):
+        mprecision[i] = max(mprecision[i], mprecision[i + 1])
+
+    indices = np.where(mrecall[1:] != mrecall[:-1])[0]
+
+    ap = np.sum((mrecall[indices + 1] - mrecall[indices]) * mprecision[indices + 1])
+    return ap
+
+
+def _calculate_mean_average_precision(per_class_results: dict):
+    """
+    Calculate the mean average precision
+
+    Args:
+        per_class_results (dict): dictionary containing the precision and recall values for each class
+    Returns:
+        float: The mean Average Precision (mAP) over all classes.
+        dict: The Average Precision (AP) per class.
+    """
+    ap_per_class = {}
+
+    for cls, (recall, precision) in per_class_results.items():
+        ap = _calculate_average_precision(recall, precision)
+        ap_per_class[cls] = ap
+
+    # average of the AP values over all classes
+    mAP = np.mean(list(ap_per_class.values()))
+    return mAP, ap_per_class

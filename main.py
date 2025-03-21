@@ -33,8 +33,18 @@ actor = YOLOActorPhoto(
     mini_batch_size=1
 )
 
-# actor.load_data()
-# model.load_model()
-actor.run_training_loop(epochs=5, learning_rate=0.001)
-model.save_model()
+def train():
+    actor.run_training_loop(epochs=5, learning_rate=0.001)
+    model.save_model()
+    
+def test():
+    actor.func_for_tests(
+        # show_model_boxes=True,
+        evaluate=True,
+        )
+    
+#train()
+test()
+
+    
 
