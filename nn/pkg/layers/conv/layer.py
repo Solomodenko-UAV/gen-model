@@ -137,7 +137,7 @@ class Convolution:
             dX (np.ndarray): gradient of the input (X), matrix shape (m, height, width, input_channels)
         """
 
-        (X, batch_cache) = self.cache
+        X = self.cache[0]
         (m, output_height, output_width, num_filters) = dZ.shape
 
         filter_size = self.filters.shape[0]
