@@ -39,7 +39,7 @@ def train():
     actor.run_training_loop(epochs=1, learning_rate=0.001)
     elapsed_time = time.time() - start_time
     print(f"Training completed in {elapsed_time:.2f} seconds")
-    model.save_model()
+    #model.save_model()
     
 def test():
     actor.func_for_tests(

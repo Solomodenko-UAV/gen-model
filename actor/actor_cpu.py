@@ -1,5 +1,4 @@
 import numpy as np
-import cupy as cp
 from PIL import Image
 import os
 import matplotlib.pyplot as plt
@@ -131,9 +130,9 @@ class YOLOActorPhoto():
                 print("No more data to train on")
                 return
 
-            Y = self.model.forward(cp.asarray(resized_images))
+            Y = self.model.forward(resized_images)
             loss = self.train_on_multiple_images(
-                Y=cp.asnumpy(Y),
+                Y=Y,
                 Y_hat=annotations,
                 original_img_shape=(original_images[0].shape[0], original_images[0].shape[1]),
                 learning_rate=learning_rate
@@ -173,7 +172,7 @@ class YOLOActorPhoto():
             Y_target[i] = self._cook_annotations(Y_hat[i], original_img_shape, self.model_input_img_res)
 
         loss, grad_A = self._calc_loss_and_gradient(Y, Y_target)
-        self.model.backward(cp.asarray(grad_A), learning_rate)
+        self.model.backward(grad_A, learning_rate)
 
         return loss
 

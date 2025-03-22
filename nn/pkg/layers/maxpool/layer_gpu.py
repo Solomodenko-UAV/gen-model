@@ -52,7 +52,7 @@ class MaxPool:
 
         return A
 
-    def as_strided(self, x, shape, strides):
+    def as_strided(x, shape, strides):
         return cp.ndarray(shape, dtype=x.dtype, memptr=x.data, strides=strides)
 
     # TODO: find out what is this

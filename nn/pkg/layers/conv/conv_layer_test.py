@@ -58,7 +58,7 @@ class TestConvLayer(unittest.TestCase):
         conv.filters = filter
         conv.biases = np.zeros((1, 1, 1, 3))
 
-        X_convolved = conv.convolve_forward(X)
+        X_convolved = conv.convolve_forward_vectorized(X)
         X_convolved_expected = np.array(
             [[[[0], [0], [0], [0]],
               [[30], [10], [-10], [-30]],
@@ -93,7 +93,7 @@ class TestConvLayer(unittest.TestCase):
         conv.filters = filters
         conv.biases = np.array([0.1, 0.2, 0.3]).reshape(1, 1, 1, 3).astype(np.float64)
 
-        X_convolved = conv.convolve_forward(X)
+        X_convolved = conv.convolve_forward_vectorized(X)
         X_convolved_expected = np.array(
             [
                 [
@@ -136,7 +136,7 @@ class TestConvLayer(unittest.TestCase):
         conv.filters = filters
         conv.biases = np.array([0., 0., 0.], dtype=np.float32).reshape(1, 1, 1, 3)
 
-        X_convolved = conv.convolve_forward(X)
+        X_convolved = conv.convolve_forward_vectorized(X)
 
         dX = conv.convolve_backward(X_convolved, 1.)
 

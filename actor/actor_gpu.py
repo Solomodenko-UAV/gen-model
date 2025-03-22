@@ -115,13 +115,13 @@ class YOLOActorPhoto():
 
             I.append(np.array(img))
             IR[i] = img_resized
-            annotations_list[i] = np.array(annotations).astype(np.float64)
+            annotations_list[i] = np.array(annotations).astype(np.float32)
             i += 1
 
         print(f"Loaded images from {self.data_idx} to {self.data_idx + self.mini_batch_size} idx")
         self.data_idx += self.mini_batch_size
 
-        return np.array(I).astype(np.float64), IR, annotations_list
+        return np.array(I).astype(np.float32), IR, annotations_list
 
     def run_training_loop(self, epochs=10, learning_rate=0.01):
         losses = []
@@ -133,7 +133,7 @@ class YOLOActorPhoto():
 
             Y = self.model.forward(cp.asarray(resized_images))
             loss = self.train_on_multiple_images(
-                Y=cp.asnumpy(Y),
+                Y=Y,
                 Y_hat=annotations,
                 original_img_shape=(original_images[0].shape[0], original_images[0].shape[1]),
                 learning_rate=learning_rate
@@ -173,7 +173,8 @@ class YOLOActorPhoto():
             Y_target[i] = self._cook_annotations(Y_hat[i], original_img_shape, self.model_input_img_res)
 
         loss, grad_A = self._calc_loss_and_gradient(Y, Y_target)
-        self.model.backward(cp.asarray(grad_A), learning_rate)
+        # loss, grad_A = self._calc_loss_and_gradient_on_gpu(Y, cp.asarray(Y_target))
+        self.model.backward(grad_A, learning_rate)
 
         return loss
 
@@ -240,6 +241,82 @@ class YOLOActorPhoto():
             Y_target[cell_y, cell_x, self.model.B * 5:] = class_targets[i]
 
         return Y_target
+
+    def _calc_loss_and_gradient_on_gpu(self, A: cp.ndarray, Y_target: cp.ndarray):
+        """
+        Calculate the loss and gradient
+
+        Args:
+            A (np.ndarray): predicted values - matrix of shape (m, S, S, B*5+C). For this function m == 1 is required
+            Y_target (np.ndarray): true values - matrix of shape (m, S, S, B*5+C)
+
+        Returns:
+            mean_loss(float): mean loss value over the image
+            grad_A(np.ndarray): gradient of the loss with respect to A - matrix of shape (m, S, S, B*5+C)
+        """
+        loss = 0.0
+        grad_A = np.zeros_like(A)
+
+        # Constants for loss weighting
+        lambda_coord = 5.0
+        lambda_noobj = 0.5
+
+        m, S, _, total = A.shape
+        B = self.model.B
+        C = self.model.C
+
+        for i in range(m):
+            for row in range(S):
+                for col in range(S):
+                    prediction = A[i, row, col]  # [B * 5 + C] array
+                    target = Y_target[i, row, col]
+
+                    # for each bounding box predictor in this cell
+                    for b in range(B):
+                        idx = b * 5
+                        pred_bbox = prediction[idx:idx+5]  # [6] array
+                        target_bbox = target[idx:idx+5]
+
+                        # if model thinks there is no object in this box
+                        if target_bbox[visDrone.object_existence_idx] == 0:
+                            conf_diff = pred_bbox[visDrone.object_existence_idx]
+                            loss += lambda_noobj * (conf_diff ** 2)
+                            grad_A[i, row, col, idx + visDrone.object_existence_idx] = 2 * lambda_noobj * conf_diff
+                            continue
+
+                        # if model thinks there is an object in this box
+                        # localization loss for x, y
+                        # calc squared error
+                        for j in range(visDrone.top_left_y_idx + 1):
+                            diff = pred_bbox[j] - target_bbox[j]
+                            loss += lambda_coord * (diff ** 2)
+                            grad_A[i, row, col, idx + j] = 2 * lambda_coord * diff
+
+                        # for width and height, apply square root transformation to stabilize small boxes
+                        for j in range(visDrone.width_idx, visDrone.height_idx + 1):
+                            # avoid division by zero
+                            pred_sqrt = np.sqrt(np.maximum(pred_bbox[j], 1e-6))
+                            target_sqrt = np.sqrt(target_bbox[j])
+
+                            diff = pred_sqrt - target_sqrt
+                            loss += lambda_coord * (diff ** 2)
+                            # derivative of sqrt (that we've just applied couple lines above) is 1/(2*sqrt(x))
+                            grad_A[i, row, col, idx+j] = 2 * lambda_coord * diff * (1/(2*np.sqrt(np.maximum(pred_bbox[j], 1e-6))))
+
+                        # confidence loss
+                        conf_diff = pred_bbox[visDrone.object_existence_idx] - target_bbox[visDrone.object_existence_idx]
+                        loss += (conf_diff ** 2)
+                        grad_A[i, row, col, idx + visDrone.object_existence_idx] = 2 * conf_diff
+
+                        # classification loss
+                        pred_class = prediction[B * 5:]  # [C] array
+                        target_class = target[B * 5:]
+                        class_diff = pred_class - target_class
+                        loss += np.sum(class_diff ** 2)
+                        grad_A[i, row, col, B * 5:] = 2 * class_diff
+
+        mean_loss = loss / (m * S * S * C)
+        return mean_loss, grad_A
 
     def _calc_loss_and_gradient(self, A: np.ndarray, Y_target: np.ndarray):
         """

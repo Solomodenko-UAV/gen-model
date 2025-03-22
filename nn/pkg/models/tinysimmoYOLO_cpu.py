@@ -1,6 +1,6 @@
 
 
-import cupy as cp
+import numpy as np
 from nn.pkg.blocks.conv_block import ConvBlock
 from nn.pkg.layers.fc.layer import FullyConnected
 from nn.pkg.layers.yolo_output.layer import YoloOutput
@@ -46,7 +46,7 @@ class TinysimmoYOLOModel:
         self.fc_layer = FullyConnected(input_size=image_size[0]*image_size[1]*128, output_size=256, l2_lambda=fc_l2_lambda, clip_value=clip_value)  # 256 is a bit more than 4*4(2*5+1)
         self.output_layer = YoloOutput(input_size=256, S=self.S, B=self.B, C=self.C, l2_lambda=fc_l2_lambda, clip_value=clip_value)
 
-    def forward(self, images: cp.ndarray):
+    def forward(self, images: np.ndarray):
         """
         Forward pass of the model
 
@@ -67,7 +67,7 @@ class TinysimmoYOLOModel:
 
         return images
 
-    def backward(self, grad_A: cp.ndarray, learning_rate: float):
+    def backward(self, grad_A: np.ndarray, learning_rate: float):
         """
         Backward pass of the model
 
@@ -93,13 +93,13 @@ class TinysimmoYOLOModel:
 
         self.fc_layer.get_params(params, 'fc_layer')
         self.output_layer.get_params(params, 'output_layer')
-        cp.savez(self.model_path, **params)
+        np.savez(self.model_path, **params)
 
     def load_model(self):
         """
         Loads the model from the disk
         """
-        params = cp.load(self.model_path + ".npz", allow_pickle=True)
+        params = np.load(self.model_path + ".npz", allow_pickle=True)
         for i, block in enumerate(self.conv_blocks):
             block.set_params(params, f'conv_block_{i}')
 

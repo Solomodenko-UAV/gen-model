@@ -1,5 +1,5 @@
 # import numpy as np
-import cupy as cp
+import numpy as np
 from nn.pkg.activations import activations
 
 
@@ -31,15 +31,15 @@ class YoloOutput:
         self.C = C
         self.out_per_cell = C + B * 5
 
-        std = cp.sqrt(2.0 / (input_size + out_dim)).astype(cp.float32)  # Xavier for softmax
-        self.weights = cp.random.randn(input_size, out_dim).astype(cp.float32) * std
-        self.biases = cp.zeros((1, out_dim), dtype=cp.float32)
+        std = np.sqrt(2.0 / (input_size + out_dim)).astype(np.float64)  # Xavier for softmax
+        self.weights = np.random.randn(input_size, out_dim).astype(np.float64) * std
+        self.biases = np.zeros((1, out_dim), dtype=np.float64)
         self.cache = {}
 
         self.l2_lambda = l2_lambda
         self.clip_value = clip_value
 
-    def feed_forward(self, X: cp.ndarray):
+    def feed_forward(self, X: np.ndarray):
         """
         forward pass of the yolo output layer
 
@@ -53,7 +53,7 @@ class YoloOutput:
         self.cache['X'] = X
 
         m = X.shape[0]
-        A = cp.dot(X, self.weights) + self.biases
+        A = np.dot(X, self.weights) + self.biases
 
         A = A.reshape(m, self.S, self.S, self.out_per_cell)
 
@@ -69,8 +69,8 @@ class YoloOutput:
             self.cache[f'x_sigmoid_{b}'] = x_sigmoid
             self.cache[f'y_sigmoid_{b}'] = y_sigmoid
 
-            grid_x = cp.arange(self.S).reshape(1, self.S, 1)
-            grid_y = cp.arange(self.S).reshape(1, 1, self.S)
+            grid_x = np.arange(self.S).reshape(1, self.S, 1)
+            grid_y = np.arange(self.S).reshape(1, 1, self.S)
 
             # apply sigmoid and add grid offset, then normalize by grid size
             A[:, :, :, x_coordinate_idx] = (x_sigmoid + grid_x) / self.S
@@ -84,7 +84,7 @@ class YoloOutput:
 
         return A
 
-    def feed_backward(self, dZ: cp.ndarray, learning_rate: float):
+    def feed_backward(self, dZ: np.ndarray, learning_rate: float):
         """
         backward pass of the yolo output layer
 
@@ -102,7 +102,7 @@ class YoloOutput:
         Z = self.cache['Z']  # (m, S, S, out_per_cell)
 
         # pre-activation output
-        dX_pre = cp.asarray(dZ)
+        dX_pre = dZ.copy()
 
         for b in range(self.B):
             x_coordinate_idx = b * 5
@@ -125,13 +125,13 @@ class YoloOutput:
 
         dX_pre = dX_pre.reshape(m, self.S * self.S * self.out_per_cell)
 
-        dW = cp.dot(X.T, dX_pre) / m  # shape (input_size, out_dim)
-        db = cp.sum(dX_pre, axis=0, keepdims=True) / m  # shape (1, out_dim)
+        dW = np.dot(X.T, dX_pre) / m  # shape (input_size, out_dim)
+        db = np.sum(dX_pre, axis=0, keepdims=True) / m  # shape (1, out_dim)
 
-        dX = cp.dot(dX_pre, self.weights.T)  # shape (m, input_size)
+        dX = np.dot(dX_pre, self.weights.T)  # shape (m, input_size)
 
-        dW = cp.clip(dW, -self.clip_value, self.clip_value)
-        db = cp.clip(db, -self.clip_value, self.clip_value)
+        dW = np.clip(dW, -self.clip_value, self.clip_value)
+        db = np.clip(db, -self.clip_value, self.clip_value)
 
         self.weights -= learning_rate * (dW + self.l2_lambda * self.weights)  # L2 regularization
         self.biases -= db * learning_rate

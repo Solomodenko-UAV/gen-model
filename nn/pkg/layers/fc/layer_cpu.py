@@ -1,4 +1,5 @@
-import cupy as cp
+import numpy as np
+
 
 class FullyConnected:
     def __init__(self,
@@ -14,13 +15,13 @@ class FullyConnected:
             input_size (int): number of input neurons
             output_size (int): number of output neurons
         """
-        std = cp.sqrt(2 / input_size).astype(cp.float32)  # He init for ReLU
-        self.weights = cp.random.randn(input_size, output_size).astype(cp.float32) * std
-        self.biases = cp.zeros((1, output_size), dtype=cp.float32)
+        std = np.sqrt(2 / input_size).astype(np.float64)  # He init for ReLU
+        self.weights = np.random.randn(input_size, output_size).astype(np.float64) * std
+        self.biases = np.zeros((1, output_size), dtype=np.float64)
         self.clip_value = clip_value
         self.l2_lambda = l2_lambda
 
-    def feed_forward(self, X: cp.ndarray):
+    def feed_forward(self, X: np.ndarray):
         """
         forward pass of the fully connected layer
 
@@ -31,12 +32,11 @@ class FullyConnected:
             A (np.ndarray): output of the fully connected layer - matrix of shape (m, output_size), represents a batch of m images
         """
 
-        X_gpu = cp.asarray(X)
-        self.cache = X_gpu
+        self.cache = X
 
-        return cp.dot(X_gpu, self.weights) + self.biases
+        return np.dot(X, self.weights) + self.biases
 
-    def feed_backward(self, dZ: cp.ndarray, learning_rate: float):
+    def feed_backward(self, dZ: np.ndarray, learning_rate: float):
         """
         backward pass of the fully connected
 
@@ -50,13 +50,13 @@ class FullyConnected:
         X = self.cache
         m = X.shape[0]
 
-        dW = cp.dot(X.T, dZ) / m
-        db = cp.sum(dZ, axis=0, keepdims=True) / m
+        dW = np.dot(X.T, dZ) / m
+        db = np.sum(dZ, axis=0, keepdims=True) / m
 
-        dX = cp.dot(dZ, self.weights.T)
+        dX = np.dot(dZ, self.weights.T)
 
-        dW = cp.clip(dW, -self.clip_value, self.clip_value)
-        db = cp.clip(db, -self.clip_value, self.clip_value)
+        dW = np.clip(dW, -self.clip_value, self.clip_value)
+        db = np.clip(db, -self.clip_value, self.clip_value)
 
         self.weights -= learning_rate * (dW + self.l2_lambda * self.weights)  # L2 regularization
         self.biases -= db * learning_rate

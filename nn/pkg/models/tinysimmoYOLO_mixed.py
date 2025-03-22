@@ -1,5 +1,6 @@
 
 
+import numpy as np
 import cupy as cp
 from nn.pkg.blocks.conv_block import ConvBlock
 from nn.pkg.layers.fc.layer import FullyConnected
@@ -46,7 +47,7 @@ class TinysimmoYOLOModel:
         self.fc_layer = FullyConnected(input_size=image_size[0]*image_size[1]*128, output_size=256, l2_lambda=fc_l2_lambda, clip_value=clip_value)  # 256 is a bit more than 4*4(2*5+1)
         self.output_layer = YoloOutput(input_size=256, S=self.S, B=self.B, C=self.C, l2_lambda=fc_l2_lambda, clip_value=clip_value)
 
-    def forward(self, images: cp.ndarray):
+    def forward(self, images: np.ndarray):
         """
         Forward pass of the model
 
@@ -62,12 +63,14 @@ class TinysimmoYOLOModel:
         # print(images)
         self.conv_output_shape = images.shape
         images = images.reshape(images.shape[0], -1)
+
+        images = cp.asarray(images)
         images = self.fc_layer.feed_forward(images)
         images = self.output_layer.feed_forward(images)
 
-        return images
+        return cp.asnumpy(images)
 
-    def backward(self, grad_A: cp.ndarray, learning_rate: float):
+    def backward(self, grad_A: np.ndarray, learning_rate: float):
         """
         Backward pass of the model
 
@@ -75,7 +78,7 @@ class TinysimmoYOLOModel:
             grad_A (np.ndarray): gradient of the loss with respect to the output of the model
             learning_rate (float): learning rate to be used for updating the weights and biases
         """
-        dZ = self.output_layer.feed_backward(grad_A, learning_rate)
+        dZ = self.output_layer.feed_backward(cp.asnumpy(grad_A), learning_rate)
         dZ = self.fc_layer.feed_backward(dZ, learning_rate)
 
         dZ = dZ.reshape(self.conv_output_shape)
@@ -93,13 +96,13 @@ class TinysimmoYOLOModel:
 
         self.fc_layer.get_params(params, 'fc_layer')
         self.output_layer.get_params(params, 'output_layer')
-        cp.savez(self.model_path, **params)
+        np.savez(self.model_path, **params)
 
     def load_model(self):
         """
         Loads the model from the disk
         """
-        params = cp.load(self.model_path + ".npz", allow_pickle=True)
+        params = np.load(self.model_path + ".npz", allow_pickle=True)
         for i, block in enumerate(self.conv_blocks):
             block.set_params(params, f'conv_block_{i}')
 

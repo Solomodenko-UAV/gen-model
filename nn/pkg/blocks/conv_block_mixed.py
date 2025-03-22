@@ -1,5 +1,5 @@
+import numpy as np
 import cupy as cp
-import cupyx.profiler as profiler
 
 from nn.pkg.activations import activations
 from nn.pkg.layers.conv.layer import Convolution
@@ -50,7 +50,7 @@ class ConvBlock:
             stride=maxpool_stride,
         )
 
-    def forward(self, X: cp.ndarray):
+    def forward(self, X: np.ndarray):
         """
         forward pass of the convolution block
 
@@ -61,22 +61,15 @@ class ConvBlock:
             Z (np.ndarray): output of the convolution block - matrix of shape (m, output_height, output_width, num_output_channels), represents a batch of m images
         """
 
-        with profiler.time_range("conv_block_forward conv1"):
-            A_conv1 = self.conv1.convolve_forward_vectorized(X)
+        A_conv1 = self.conv1.convolve_forward_vectorized(X)
+        Z_conv1 = activations.relu(A_conv1)
 
-        with profiler.time_range("conv_block_forward relu1"):
-            Z_conv1 = activations.relu(A_conv1)
+        A_conv2 = self.conv2.convolve_forward_vectorized(Z_conv1)
+        Z_conv2 = activations.relu(A_conv2)
 
-        with profiler.time_range("conv_block_forward conv2"):
-            A_conv2 = self.conv2.convolve_forward_vectorized(Z_conv1)
+        Z = self.maxpool.pool_forward(cp.asarray(Z_conv2))
 
-        with profiler.time_range("conv_block_forward relu2"):
-            Z_conv2 = activations.relu(A_conv2)
-
-        with profiler.time_range("conv_block_forward maxpool"):
-            Z = self.maxpool.pool_forward_vectorized(Z_conv2)
-
-        return Z
+        return cp.asnumpy(Z)
 
     def backward(self, dZ: cp.ndarray, learning_rate: float):
         """
@@ -90,11 +83,14 @@ class ConvBlock:
             dA(np.ndarray): gradient of the cost with respect to the input of the convolution block - matrix of shape (m, height, width, num_input_channels), represents a batch of m images
         """
 
-        dZ_maxpool = self.maxpool.pool_backward_vectorized(dZ)
+        dZ_maxpool = self.maxpool.pool_backward(dZ)
         dZ_conv2 = activations.relu_derivative(dZ_maxpool)
-        dA_conv2 = self.conv2.convolve_backward_vectorized(dZ_conv2, learning_rate)
+        
+        dZ_conv2 = cp.asarray(dZ_conv2)
+        dA_conv2 = self.conv2.convolve_backward(cp.asnumpy(dZ_conv2), learning_rate)
+
         dZ_conv1 = activations.relu_derivative(dA_conv2)
-        dA = self.conv1.convolve_backward_vectorized(dZ_conv1, learning_rate)
+        dA = self.conv1.convolve_backward(dZ_conv1, learning_rate)
 
         return dA
 
