@@ -117,6 +117,7 @@ class YOLOActorPhoto():
             annotations_list[i] = np.array(annotations).astype(np.float64)
             i += 1
 
+        print(f"Loaded images from {self.data_idx} to {self.data_idx + self.mini_batch_size} idx")
         self.data_idx += self.mini_batch_size
 
         return np.array(I).astype(np.float64), IR, annotations_list
@@ -125,6 +126,10 @@ class YOLOActorPhoto():
         losses = []
         for i in range(epochs):
             original_images, resized_images, annotations = self.load_data()
+            if resized_images.shape[0] == 0:
+                print("No more data to train on")
+                return
+            
             Y = self.model.forward(resized_images)
             loss = self.train_on_multiple_images(
                 Y=Y,
@@ -143,7 +148,7 @@ class YOLOActorPhoto():
         plt.title("Training Loss Over Epochs")
         plt.legend()
         plt.grid(True)
-        plt.show()
+        # plt.show()
 
     def train_on_multiple_images(self,
                                  Y: np.ndarray,
@@ -219,13 +224,14 @@ class YOLOActorPhoto():
             cell_y = int(cells_y[i])
 
             # bounding box target
-            bbox_target = [
+            bbox_target = np.array([
                 X_cells_offset[i],
                 Y_cells_offset[i],
                 Y_norm[i, visDrone.width_idx],
                 Y_norm[i, visDrone.height_idx],
                 1,
-            ]
+            ])
+            
 
             # TODO: for now it's just 1st box, but I should choose the best somehow (IoU based?)
             bbox_slot = 0

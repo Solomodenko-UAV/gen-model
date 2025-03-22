@@ -1,5 +1,5 @@
-import numpy as np
-
+# import numpy as np
+import cupy as np
 from nn.pkg.activations import activations
 
 
@@ -50,11 +50,11 @@ class YoloOutput:
             A (np.ndarray): output of the yolo output layer - matrix of shape (m, S, S, out_per_cell), represents a batch of m images
         """
 
-        self.cache['X'] = X
+        X_cp = np.asarray(X)
+        self.cache['X'] = X_cp
 
         m = X.shape[0]
-        A = np.dot(X, self.weights) + self.biases
-        self.cache['A'] = np.copy(A)  # before any activation
+        A = np.dot(X_cp, self.weights) + self.biases
 
         A = A.reshape(m, self.S, self.S, self.out_per_cell)
 
@@ -63,23 +63,27 @@ class YoloOutput:
             x_coordinate_idx = b * 5  # relative center x coordinate value index
             y_coordinate_idx = b * 5 + 1  # relative center y coordinate value index
             confidence_idx = b * 5 + 4  # confidence value index
+            
+            x_sigmoid = activations.sigmoid(A[:, :, :, x_coordinate_idx])
+            y_sigmoid = activations.sigmoid(A[:, :, :, y_coordinate_idx])
+            
+            self.cache[f'x_sigmoid_{b}'] = x_sigmoid
+            self.cache[f'y_sigmoid_{b}'] = y_sigmoid
 
             grid_x = np.arange(self.S).reshape(1, self.S, 1)
             grid_y = np.arange(self.S).reshape(1, 1, self.S)
 
-            # YOLO-style x, y transformation
-            A[:, :, :, x_coordinate_idx] = (activations.sigmoid(A[:, :, :, x_coordinate_idx]) + grid_x) / self.S  # TODO: what's the backprop for this?
-            A[:, :, :, y_coordinate_idx] = (activations.sigmoid(A[:, :, :, y_coordinate_idx]) + grid_y) / self.S
-
-            # A[:, :, :, x_coordinate_idx] = activations.sigmoid(A[:, :, :, x_coordinate_idx])
-            # A[:, :, :, y_coordinate_idx] = activations.sigmoid(A[:, :, :, y_coordinate_idx])
+            # apply sigmoid and add grid offset, then normalize by grid size
+            A[:, :, :, x_coordinate_idx] = (x_sigmoid + grid_x) / self.S
+            A[:, :, :, y_coordinate_idx] = (y_sigmoid + grid_y) / self.S
+            
             A[:, :, :, confidence_idx] = activations.sigmoid(A[:, :, :, confidence_idx])
             # leave weight and height (indices b*5+2 and b*5+3) as is
 
         A[:, :, :, self.B * 5:] = activations.softmax(A[:, :, :, self.B * 5:])  # apply softmax to class scores
         self.cache['Z'] = np.copy(A)  # after activation
 
-        return A
+        return np.asnumpy(A)
 
     def feed_backward(self, dZ: np.ndarray, learning_rate: float):
         """
@@ -96,29 +100,24 @@ class YoloOutput:
         m = dZ.shape[0]
 
         X = self.cache['X']  # (m, input_size)
-        A = self.cache['A']  # (m, S, S, out_per_cell)
         Z = self.cache['Z']  # (m, S, S, out_per_cell)
 
         # pre-activation output
-        dX_pre = np.copy(dZ)
+        dX_pre = np.asarray(dZ)
 
         for b in range(self.B):
             x_coordinate_idx = b * 5
             y_coordinate_idx = b * 5 + 1
             confidence_idx = b * 5 + 4
-
-            xs = Z[:, :, :, x_coordinate_idx]
-            ys = Z[:, :, :, y_coordinate_idx]
-            cs = Z[:, :, :, confidence_idx]
-
-            sigmoid_x = activations.sigmoid(xs)
+            
+            sigmoid_x = self.cache[f'x_sigmoid_{b}']
+            sigmoid_y = self.cache[f'y_sigmoid_{b}']
+            
             dX_pre[:, :, :, x_coordinate_idx] *= (sigmoid_x * (1 - sigmoid_x)) / self.S
-            sigmoid_y = activations.sigmoid(ys)
             dX_pre[:, :, :, y_coordinate_idx] *= (sigmoid_y * (1 - sigmoid_y)) / self.S
-
-            # dX_pre[:, :, :, x_coordinate_idx] *= activations.sigmoid_derivative(xs) + 1e-6
-            # dX_pre[:, :, :, y_coordinate_idx] *= activations.sigmoid_derivative(ys) + 1e-6
-            dX_pre[:, :, :, confidence_idx] *= activations.sigmoid_derivative(cs) + 1e-6
+            
+            confidence_value = Z[:, :, :, confidence_idx]
+            dX_pre[:, :, :, confidence_idx] *= activations.sigmoid_derivative(confidence_value) + 1e-6
             # leave weight and height (indices b*5+2 and b*5+3) as is
 
         softmax_output = Z[:, :, :, self.B * 5:]
@@ -138,7 +137,7 @@ class YoloOutput:
         self.weights -= learning_rate * (dW + self.l2_lambda * self.weights)  # L2 regularization
         self.biases -= db * learning_rate
 
-        return dX
+        return np.asnumpy(dX)
 
     def get_params(self, params: dict, key: str):
         params[f'{key}_weights'] = self.weights

@@ -1,5 +1,6 @@
 
 
+import time
 from actor.actor import YOLOActorPhoto
 from nn.pkg.models.tinysimmoYOLO import TinysimmoYOLOModel
 import platform
@@ -30,11 +31,14 @@ actor = YOLOActorPhoto(
     annotation_folder=annotation_folder,
     model_input_img_res=(88, 88),
     model=model,
-    mini_batch_size=1
+    mini_batch_size=6
 )
 
 def train():
-    actor.run_training_loop(epochs=5, learning_rate=0.001)
+    start_time = time.time()
+    actor.run_training_loop(epochs=1, learning_rate=0.001)
+    elapsed_time = time.time() - start_time
+    print(f"Training completed in {elapsed_time:.2f} seconds")
     model.save_model()
     
 def test():
@@ -43,8 +47,6 @@ def test():
         evaluate=True,
         )
     
-#train()
-test()
-
+train()
     
 
