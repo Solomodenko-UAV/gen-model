@@ -24,6 +24,8 @@ class YOLOActorPhoto():
         self.model = model
         self.mini_batch_size = mini_batch_size
         self.data_idx = 0
+        self.default_bounding_box_offsets = np.array([[0.5, 0.5] for _ in range(model.B)])
+        self._find_out_default_anchors()
 
     def func_for_tests(self, show_model_boxes=False, evaluate=False):
         entries = os.listdir(self.data_folder)
@@ -148,16 +150,16 @@ class YOLOActorPhoto():
         resized_annotations_list = cp.zeros((len(img_files), self.model.S, self.model.S, self.model.B * 5 + self.model.C)).astype(np.float32)
         i = 0
 
-        for file_name, img_path in img_files.items():            
+        for file_name, img_path in img_files.items():
             img, img_resized = self._prepare_single_image(img_path)
             annotations_list = _extract_visDrone_annotations(annotation_files[file_name])
 
             resized_images[i] = img_resized
-            
+
             annotations_list = np.array(annotations_list).astype(np.float32)
-            annotations_list[:, visDrone.category_idx] -= 1 # categories are 1-indexed, but we need 0-indexed
-            
-            orig_annotations_list[i] = np.array(annotations_list).astype(np.float32)            
+            annotations_list[:, visDrone.category_idx] -= 1  # categories are 1-indexed, but we need 0-indexed
+
+            orig_annotations_list[i] = np.array(annotations_list).astype(np.float32)
             resized_annotations_list[i] = cp.array(self._cook_annotations(orig_annotations_list[i], (img.shape[0], img.shape[1]), self.model_input_img_res))
 
             i += 1
@@ -167,14 +169,17 @@ class YOLOActorPhoto():
 
         return resized_images, resized_annotations_list, orig_annotations_list
 
-    def run_training_loop(self, start_image_idx = 0, epochs=10, learning_rate=0.01):
+    def run_training_loop(self, start_image_idx=0, epochs=10, learning_rate=0.01):
+        if not hasattr(self, "default_bounding_box_offsets"):
+            self._find_out_default_anchors()
+
         start_epoch = start_image_idx // self.mini_batch_size
         losses = []
         for i in range(epochs):
             resized_images, resized_annotations, original_annotations = self.load_data_without_orig_image()
             if i < start_epoch:
                 continue
-            
+
             if resized_images.shape[0] == 0:
                 print("No more data to train on")
                 return
@@ -197,7 +202,7 @@ class YOLOActorPhoto():
         plt.title("Training Loss Over Epochs")
         plt.legend()
         plt.grid(True)
-        plt.show()
+        # plt.show()
 
     def train_on_multiple_images(self,
                                  Y: np.ndarray,
@@ -253,8 +258,8 @@ class YOLOActorPhoto():
         cells_y = Y_center // cell_height
 
         # calc offset of the x and y inside the cell where the center of the box is. Relative values [0, 1]
-        X_cells_offset = (X_center - cells_x * cell_width) / cell_width
-        Y_cells_offset = (Y_center - cells_y * cell_height) / cell_height
+        X_cells_offset = (X_center - cells_x * cell_width) / cell_width  # shape (m,)
+        Y_cells_offset = (Y_center - cells_y * cell_height) / cell_height  # shape (m,)
 
         # create one-hot encoding vector for the class
         class_targets = np.zeros((m, self.model.C))
@@ -277,9 +282,11 @@ class YOLOActorPhoto():
                 1,
             ])
 
-            # TODO: for now it's just 1st box, but I should choose the best somehow (IoU based?)
-            bbox_slot = 0
-            start_index = bbox_slot * 5
+            true_center_offset = np.array([X_cells_offset[i], Y_cells_offset[i]])
+            distances = np.linalg.norm(self.default_bounding_box_offsets - true_center_offset, axis=1)
+
+            best_bbox_slot = np.argmin(distances)
+            start_index = best_bbox_slot * 5
             Y_target[cell_y, cell_x, start_index:start_index+5] = bbox_target
             Y_target[cell_y, cell_x, self.model.B * 5:] = class_targets[i]
 
@@ -304,7 +311,7 @@ class YOLOActorPhoto():
         lambda_coord = 5.0
         lambda_noobj = 0.5
 
-        m, S, _, total = A.shape
+        m, S, _, _ = A.shape
         B = self.model.B
         C = self.model.C
 
@@ -522,6 +529,20 @@ class YOLOActorPhoto():
         img_array = np.array(img)
         img_resized = _downscale_img(img_array, self.model_input_img_res)
         return (img_array, img_resized)
+
+    def _find_out_default_anchors(self):
+        entries = os.listdir(self.data_folder)
+        boxes = []
+
+        for i, image_file_name in enumerate(entries):
+            img, img_downscaled = self._prepare_single_image(os.path.join(self.data_folder, image_file_name))
+            annotations = _extract_visDrone_annotations(os.path.join(self.annotation_folder, image_file_name.split('.')[0]) + ".txt")
+            annotations = _downscale_annotation(annotations, img.shape[0] // img_downscaled.shape[0], img.shape[1] // img_downscaled.shape[1])
+
+            for annotation in annotations:
+                boxes.append([annotation[visDrone.width_idx], annotation[visDrone.height_idx]])
+
+        self.default_bounding_box_offsets = _kmeans(boxes=np.array(boxes), k=self.model.B)
 
 
 def _downscale_img(image: np.ndarray, new_shape: tuple):
@@ -786,3 +807,57 @@ def _calculate_mean_average_precision(per_class_results: dict):
     # average of the AP values over all classes
     mAP = np.mean(list(ap_per_class.values()))
     return mAP, ap_per_class
+
+
+def _kmeans_iou(box, clusters):
+    """
+    Calculate the Intersection over Union (IoU) between a box and k clusters.
+    box: tuple or array, (width, height)
+    clusters: numpy array of shape (k, 2)
+    """
+    x = np.minimum(clusters[:, 0], box[0])
+    y = np.minimum(clusters[:, 1], box[1])
+
+    intersection = x * y
+
+    box_area = box[0] * box[1]
+    clusters_area = clusters[:, 0] * clusters[:, 1]
+
+    return intersection / (box_area + clusters_area - intersection)
+
+
+def _kmeans(boxes, k, dist=np.median, max_iter=300):
+    """
+    Runs k-means clustering with an IoU-based distance metric.
+
+    boxes: numpy array of shape (n, 2) where n is the number of boxes and each box is (width, height)
+    k: number of clusters (anchors)
+    dist: function to calculate the cluster center, here median is used
+    max_iter: maximum iterations to run
+    """
+    num_boxes = boxes.shape[0]
+
+    # initialize clusters by randomly choosing k boxes from the dataset.
+    clusters = boxes[np.random.choice(num_boxes, k, replace=False)]
+
+    last_clusters = np.zeros((num_boxes,))
+
+    for iteration in range(max_iter):
+        distances = np.zeros((num_boxes, k))
+
+        for i in range(num_boxes):
+            distances[i] = 1 - _kmeans_iou(boxes[i], clusters)
+
+        current_clusters = np.argmin(distances, axis=1)
+        if (last_clusters == current_clusters).all():
+            break
+
+        for cluster in range(k):
+            if np.sum(current_clusters == cluster) == 0:
+                continue
+
+            clusters[cluster] = dist(boxes[current_clusters == cluster], axis=0)
+
+        last_clusters = current_clusters
+
+    return clusters
