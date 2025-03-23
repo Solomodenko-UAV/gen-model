@@ -61,7 +61,7 @@ class YOLOActorPhoto():
 
                 if show_model_boxes:
                     boxes_data = cp.asnumpy(self.predict(cp.array(images)))
-                    fig, ax = plt.subplots(1)
+                    _, ax = plt.subplots(1)
                     ax.imshow(img_resized)
                     for i in range(len(boxes_data)):
                         boxes_per_image = boxes_data[i]
@@ -122,7 +122,6 @@ class YOLOActorPhoto():
             annotations_list[i] = np.array(annotations).astype(np.float32)
             i += 1
 
-        print(f"Loaded images from {self.data_idx} to {self.data_idx + self.mini_batch_size} idx")
         self.data_idx += self.mini_batch_size
 
         return np.array(I).astype(np.float32), IR, annotations_list
@@ -164,7 +163,6 @@ class YOLOActorPhoto():
 
             i += 1
 
-        print(f"Loaded images from {self.data_idx} to {self.data_idx + self.mini_batch_size} idx")
         self.data_idx += self.mini_batch_size
 
         return resized_images, resized_annotations_list, orig_annotations_list
@@ -176,13 +174,14 @@ class YOLOActorPhoto():
         start_epoch = start_image_idx // self.mini_batch_size
         losses = []
         for i in range(epochs):
-            resized_images, resized_annotations, original_annotations = self.load_data_without_orig_image()
+            resized_images, resized_annotations, _ = self.load_data_without_orig_image()
             if i < start_epoch:
                 continue
 
             if resized_images.shape[0] == 0:
                 print("No more data to train on")
-                return
+                epochs = i
+                break
 
             Y = self.model.forward(cp.asarray(resized_images))
 
@@ -194,7 +193,8 @@ class YOLOActorPhoto():
 
             losses.append(loss)
 
-            print(f"Epoch {i}, loss: {loss}")
+            if i % 10 == 0:
+                print(f"Epoch {i}, loss: {loss}")
 
         plt.plot(range(epochs), losses, label="Loss")
         plt.xlabel("Epochs")
@@ -202,7 +202,7 @@ class YOLOActorPhoto():
         plt.title("Training Loss Over Epochs")
         plt.legend()
         plt.grid(True)
-        # plt.show()
+        plt.show()
 
     def train_on_multiple_images(self,
                                  Y: np.ndarray,
@@ -537,9 +537,9 @@ class YOLOActorPhoto():
         for i, image_file_name in enumerate(entries):
             img, img_downscaled = self._prepare_single_image(os.path.join(self.data_folder, image_file_name))
             annotations = _extract_visDrone_annotations(os.path.join(self.annotation_folder, image_file_name.split('.')[0]) + ".txt")
-            annotations = _downscale_annotation(annotations, img.shape[0] // img_downscaled.shape[0], img.shape[1] // img_downscaled.shape[1])
+            annotations_downscaled = _downscale_annotation(annotations, img.shape[0] // img_downscaled.shape[0], img.shape[1] // img_downscaled.shape[1])
 
-            for annotation in annotations:
+            for annotation in annotations_downscaled:
                 boxes.append([annotation[visDrone.width_idx], annotation[visDrone.height_idx]])
 
         self.default_bounding_box_offsets = _kmeans(boxes=np.array(boxes), k=self.model.B)
@@ -582,10 +582,10 @@ def _downscale_annotation(annotations: list, factor_H: int, factor_W: int):
 
     annotation_downscaled = [list(annotation) for annotation in annotations]
     for i in range(len(annotations)):
-        annotation_downscaled[i][visDrone.top_left_x_idx] //= factor_W
-        annotation_downscaled[i][visDrone.top_left_y_idx] //= factor_H
-        annotation_downscaled[i][visDrone.width_idx] //= factor_W
-        annotation_downscaled[i][visDrone.height_idx] //= factor_H
+        annotation_downscaled[i][visDrone.top_left_x_idx] =  annotation_downscaled[i][visDrone.top_left_x_idx] // factor_W + 1e-6
+        annotation_downscaled[i][visDrone.top_left_y_idx] = annotation_downscaled[i][visDrone.top_left_y_idx] // factor_H + 1e-6
+        annotation_downscaled[i][visDrone.width_idx]  = annotation_downscaled[i][visDrone.width_idx] // factor_W + 1e-6
+        annotation_downscaled[i][visDrone.height_idx]  = annotation_downscaled[i][visDrone.height_idx] // factor_H + 1e-6
 
     return annotation_downscaled
 
@@ -823,7 +823,8 @@ def _kmeans_iou(box, clusters):
     box_area = box[0] * box[1]
     clusters_area = clusters[:, 0] * clusters[:, 1]
 
-    return intersection / (box_area + clusters_area - intersection)
+    res = intersection / (box_area + clusters_area - intersection)
+    return res
 
 
 def _kmeans(boxes, k, dist=np.median, max_iter=300):

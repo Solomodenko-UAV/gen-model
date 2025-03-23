@@ -1,6 +1,7 @@
 
 
 import cupy as cp
+import numpy as np
 from nn.pkg.blocks.conv_block import ConvBlock
 from nn.pkg.layers.fc.layer import FullyConnected
 from nn.pkg.layers.yolo_output.layer import YoloOutput
@@ -93,13 +94,13 @@ class TinysimmoYOLOModel:
 
         self.fc_layer.get_params(params, 'fc_layer')
         self.output_layer.get_params(params, 'output_layer')
-        cp.savez(self.model_path, **params)
+        np.savez(self.model_path, **params)
 
     def load_model(self):
         """
         Loads the model from the disk
         """
-        params = cp.load(self.model_path + ".npz", allow_pickle=True)
+        params = np.load(self.model_path + ".npz", allow_pickle=True)
         for i, block in enumerate(self.conv_blocks):
             block.set_params(params, f'conv_block_{i}')
 

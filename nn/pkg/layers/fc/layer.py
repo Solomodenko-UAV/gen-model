@@ -64,15 +64,15 @@ class FullyConnected:
         return dX
 
     def get_params(self, params: dict, key: str):
-        params[f'{key}_weights'] = self.weights
-        params[f'{key}_biases'] = self.biases
-        params[f'{key}_l2_lambda'] = self.l2_lambda
-        params[f'{key}_clip_value'] = self.clip_value
+        params[f'{key}_weights'] = cp.asnumpy(self.weights)
+        params[f'{key}_biases'] = cp.asnumpy(self.biases)
+        params[f'{key}_l2_lambda'] = cp.asnumpy(self.l2_lambda)
+        params[f'{key}_clip_value'] = cp.asnumpy(self.clip_value)
 
         return params
 
     def set_params(self, params: dict, key: str):
-        self.weights = params[f'{key}_weights']
-        self.biases = params[f'{key}_biases']
+        self.weights = cp.array(params[f'{key}_weights'])
+        self.biases = cp.array(params[f'{key}_biases'])
         self.l2_lambda = params[f'{key}_l2_lambda'].item()
         self.clip_value = params[f'{key}_clip_value'].item()

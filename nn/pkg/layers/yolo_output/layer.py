@@ -62,10 +62,10 @@ class YoloOutput:
             x_coordinate_idx = b * 5  # relative center x coordinate value index
             y_coordinate_idx = b * 5 + 1  # relative center y coordinate value index
             confidence_idx = b * 5 + 4  # confidence value index
-            
+
             x_sigmoid = activations.sigmoid(A[:, :, :, x_coordinate_idx])
             y_sigmoid = activations.sigmoid(A[:, :, :, y_coordinate_idx])
-            
+
             self.cache[f'x_sigmoid_{b}'] = x_sigmoid
             self.cache[f'y_sigmoid_{b}'] = y_sigmoid
 
@@ -75,7 +75,7 @@ class YoloOutput:
             # apply sigmoid and add grid offset, then normalize by grid size
             A[:, :, :, x_coordinate_idx] = (x_sigmoid + grid_x) / self.S
             A[:, :, :, y_coordinate_idx] = (y_sigmoid + grid_y) / self.S
-            
+
             A[:, :, :, confidence_idx] = activations.sigmoid(A[:, :, :, confidence_idx])
             # leave weight and height (indices b*5+2 and b*5+3) as is
 
@@ -97,7 +97,7 @@ class YoloOutput:
         """
 
         m = dZ.shape[0]
-        
+
         X = self.cache['X']  # (m, input_size)
         Z = self.cache['Z']  # (m, S, S, out_per_cell)
 
@@ -108,13 +108,13 @@ class YoloOutput:
             x_coordinate_idx = b * 5
             y_coordinate_idx = b * 5 + 1
             confidence_idx = b * 5 + 4
-            
+
             sigmoid_x = self.cache[f'x_sigmoid_{b}']
             sigmoid_y = self.cache[f'y_sigmoid_{b}']
-            
+
             dX_pre[:, :, :, x_coordinate_idx] *= (sigmoid_x * (1 - sigmoid_x)) / self.S
             dX_pre[:, :, :, y_coordinate_idx] *= (sigmoid_y * (1 - sigmoid_y)) / self.S
-            
+
             confidence_value = Z[:, :, :, confidence_idx]
             dX_pre[:, :, :, confidence_idx] *= activations.sigmoid_derivative(confidence_value) + 1e-6
             # leave weight and height (indices b*5+2 and b*5+3) as is
@@ -139,18 +139,18 @@ class YoloOutput:
         return dX
 
     def get_params(self, params: dict, key: str):
-        params[f'{key}_weights'] = self.weights
-        params[f'{key}_biases'] = self.biases
-        params[f'{key}_l2_lambda'] = self.l2_lambda
-        params[f'{key}_clip_value'] = self.clip_value
-        params[f'{key}_S'] = self.S
-        params[f'{key}_B'] = self.B
-        params[f'{key}_C'] = self.C
-        params[f'{key}_out_per_cell'] = self.out_per_cell
+        params[f'{key}_weights'] = cp.asnumpy(self.weights)
+        params[f'{key}_biases'] = cp.asnumpy(self.biases)
+        params[f'{key}_l2_lambda'] = cp.asnumpy(self.l2_lambda)
+        params[f'{key}_clip_value'] = cp.asnumpy(self.clip_value)
+        params[f'{key}_S'] = cp.asnumpy(self.S)
+        params[f'{key}_B'] = cp.asnumpy(self.B)
+        params[f'{key}_C'] = cp.asnumpy(self.C)
+        params[f'{key}_out_per_cell'] = cp.asnumpy(self.out_per_cell)
 
     def set_params(self, params: dict, key: str):
-        self.weights = params[f'{key}_weights']
-        self.biases = params[f'{key}_biases']
+        self.weights = cp.array(params[f'{key}_weights'])
+        self.biases = cp.array(params[f'{key}_biases'])
         self.l2_lambda = params[f'{key}_l2_lambda'].item()
         self.clip_value = params[f'{key}_clip_value'].item()
         self.S = params[f'{key}_S'].item()

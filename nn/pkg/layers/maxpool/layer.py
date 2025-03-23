@@ -78,8 +78,8 @@ class MaxPool:
                    X.strides[3])
 
         X_windows = cp.lib.stride_tricks.as_strided(X, shape=shape, strides=strides)
-        
-        A = cp.max(X_windows, axis=(3, 4)) # basically apply max pooling to each window
+
+        A = cp.max(X_windows, axis=(3, 4))  # basically apply max pooling to each window
 
         self.cache = (X, X_windows)
         return A
@@ -172,11 +172,11 @@ class MaxPool:
         return dX
 
     def get_params(self, params: dict, key: str):
-        params[f'{key}_pool_size'] = self.pool_size
-        params[f'{key}_stride'] = self.stride
+        params[f'{key}_pool_size'] = cp.asnumpy(self.pool_size)
+        params[f'{key}_stride'] = cp.asnumpy(self.stride)
 
         return params
 
     def set_params(self, params: dict, key: str):
-        self.pool_size = params[f'{key}_pool_size'].item()
-        self.stride = params[f'{key}_stride'].item()
+        self.pool_size = params[f'{key}_pool_size']
+        self.stride = params[f'{key}_stride']

@@ -313,32 +313,32 @@ class Convolution:
         return dZ_norm, dgamma, dbeta
 
     def get_params(self, params: dict, key: str):
-        params[f'{key}_filters'] = self.filters
-        params[f'{key}_biases'] = self.biases
-        params[f'{key}_stride'] = self.stride
-        params[f'{key}_padding'] = self.padding
-        params[f'{key}_l2_lambda'] = self.l2_lambda
-        params[f'{key}_clip_value'] = self.clip_value
-        params[f'{key}_momentum'] = self.momentum
-        params[f'{key}_gamma'] = self.gamma
-        params[f'{key}_beta'] = self.beta
-        params[f'{key}_eps'] = self.eps
-        params[f'{key}_running_mean'] = self.running_mean
-        params[f'{key}_running_variance'] = self.running_variance
+        params[f'{key}_filters'] = cp.asnumpy(self.filters)
+        params[f'{key}_biases'] = cp.asnumpy(self.biases)
+        params[f'{key}_stride'] = cp.asnumpy(self.stride)
+        params[f'{key}_padding'] = cp.asnumpy(self.padding)
+        params[f'{key}_l2_lambda'] = cp.asnumpy(self.l2_lambda)
+        params[f'{key}_clip_value'] = cp.asnumpy(self.clip_value)
+        params[f'{key}_momentum'] = cp.asnumpy(self.momentum)
+        params[f'{key}_gamma'] = cp.asnumpy(self.gamma)
+        params[f'{key}_beta'] = cp.asnumpy(self.beta)
+        params[f'{key}_eps'] = cp.asnumpy(self.eps)
+        params[f'{key}_running_mean'] = cp.asnumpy(self.running_mean)
+        params[f'{key}_running_variance'] = cp.asnumpy(self.running_variance)
 
     def set_params(self, params: dict, key: str):
-        self.filters = params[f'{key}_filters']
-        self.biases = params[f'{key}_biases']
+        self.filters = cp.array(params[f'{key}_filters'])
+        self.biases = cp.array(params[f'{key}_biases'])
         self.stride = params[f'{key}_stride'].item()
         self.padding = params[f'{key}_padding'].item()
         self.l2_lambda = params[f'{key}_l2_lambda'].item()
         self.clip_value = params[f'{key}_clip_value'].item()
         self.momentum = params[f'{key}_momentum'].item()
-        self.gamma = params[f'{key}_gamma']
-        self.beta = params[f'{key}_beta']
+        self.gamma = cp.array(params[f'{key}_gamma'])
+        self.beta = cp.array(params[f'{key}_beta'])
         self.eps = params[f'{key}_eps'].item()
-        self.running_mean = params[f'{key}_running_mean']
-        self.running_variance = params[f'{key}_running_variance']
+        self.running_mean = cp.array(params[f'{key}_running_mean'])
+        self.running_variance = cp.array(params[f'{key}_running_variance'])
 
 
 def _im2col(X, filter_height, filter_width, padding, stride):
