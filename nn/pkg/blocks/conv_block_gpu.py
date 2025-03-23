@@ -55,10 +55,10 @@ class ConvBlock:
         forward pass of the convolution block
 
         Args:
-            X (np.ndarray): input to the convolution block - matrix of shape (m, height, width, num_input_channels), represents a batch of m images
+            X (cp.ndarray): input to the convolution block - matrix of shape (m, height, width, num_input_channels), represents a batch of m images
 
         Returns:
-            Z (np.ndarray): output of the convolution block - matrix of shape (m, output_height, output_width, num_output_channels), represents a batch of m images
+            Z (cp.ndarray): output of the convolution block - matrix of shape (m, output_height, output_width, num_output_channels), represents a batch of m images
         """
 
         with profiler.time_range("conv_block_forward conv1"):
@@ -83,11 +83,11 @@ class ConvBlock:
         backward pass of the convolution block
 
         Args:
-            dZ (np.ndarray): gradient of the cost with respect to the output of the convolution block - matrix of shape (m, output_height, output_width, num_output_channels), represents a batch of m images
+            dZ (cp.ndarray): gradient of the cost with respect to the output of the convolution block - matrix of shape (m, output_height, output_width, num_output_channels), represents a batch of m images
             learning_rate (float): learning rate to be used for updating the weights and biases
 
         Returns:
-            dA(np.ndarray): gradient of the cost with respect to the input of the convolution block - matrix of shape (m, height, width, num_input_channels), represents a batch of m images
+            dA(cp.ndarray): gradient of the cost with respect to the input of the convolution block - matrix of shape (m, height, width, num_input_channels), represents a batch of m images
         """
 
         dZ_maxpool = self.maxpool.pool_backward_vectorized(dZ)

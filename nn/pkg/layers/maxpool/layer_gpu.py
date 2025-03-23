@@ -23,10 +23,10 @@ class MaxPool:
         forward pass of the pooling layer
 
         Args:
-            X (np.ndarray): input to the pooling layer - matrix of shape (m, input_height, input_width, num_input_channels), represents a batch of m images
+            X (cp.ndarray): input to the pooling layer - matrix of shape (m, input_height, input_width, num_input_channels), represents a batch of m images
 
         Returns:
-            A (np.ndarray): output of the pooling layer - matrix of shape (m, output_height, output_width, input_num_filters), represents a batch of m images
+            A (cp.ndarray): output of the pooling layer - matrix of shape (m, output_height, output_width, input_num_filters), represents a batch of m images
         """
 
         (m, input_height, input_width, num_input_channels) = X.shape
@@ -52,19 +52,15 @@ class MaxPool:
 
         return A
 
-    def as_strided(self, x, shape, strides):
-        return cp.ndarray(shape, dtype=x.dtype, memptr=x.data, strides=strides)
-
-    # TODO: find out what is this
     def pool_forward_vectorized(self, X: cp.ndarray):
         """
         forward pass of the pooling layer
 
         Args:
-            X (np.ndarray): input to the pooling layer - matrix of shape (m, input_height, input_width, num_input_channels), represents a batch of m images
+            X (cp.ndarray): input to the pooling layer - matrix of shape (m, input_height, input_width, num_input_channels), represents a batch of m images
 
         Returns:
-            A (np.ndarray): output of the pooling layer - matrix of shape (m, output_height, output_width, input_num_filters), represents a batch of m images
+            A (cp.ndarray): output of the pooling layer - matrix of shape (m, output_height, output_width, num_input_channels), represents a batch of m images
         """
 
         (m, input_height, input_width, num_input_channels) = X.shape
@@ -72,6 +68,7 @@ class MaxPool:
         output_height = int((input_height - self.pool_size) / self.stride) + 1
         output_width = int((input_width - self.pool_size) / self.stride) + 1
 
+        # with this shape we will have matrix with each pool window already extracted
         shape = (m, output_height, output_width, self.pool_size, self.pool_size, num_input_channels)
         strides = (X.strides[0],
                    X.strides[1] * self.stride,
@@ -80,9 +77,9 @@ class MaxPool:
                    X.strides[2],
                    X.strides[3])
 
-        X_windows = self.as_strided(X, shape=shape, strides=strides)
-
-        A = cp.max(X_windows, axis=(3, 4))
+        X_windows = cp.lib.stride_tricks.as_strided(X, shape=shape, strides=strides)
+        
+        A = cp.max(X_windows, axis=(3, 4)) # basically apply max pooling to each window
 
         self.cache = (X, X_windows)
         return A
@@ -93,35 +90,35 @@ class MaxPool:
         Assumes non-overlapping pooling (stride == pool_size).
 
         Args:
-            dA (cp.ndarray): Upstream gradient of shape (m, out_h, out_w, C)
+            dZ (cp.ndarray): gradient of the cost with respect to the output of the pooling layer - matrix of shape (m, input_height, input_width, num_input_channels)
 
         Returns:
-            dX (cp.ndarray): Gradient w.r.t. input X of shape (m, H, W, C)
+            dX (cp.ndarray): gradient of the cost with respect to the input of the pooling layer - matrix of shape (m, input_height, input_width, num_input_channels)
         """
-        X, X_windows = self.cache  # X_windows has shape (m, out_h, out_w, pool_size, pool_size, C)
-        (m, H, W, C) = X.shape
+        X, X_windows = self.cache
+        (_, input_height, input_width, _) = X.shape
         pool_size = self.pool_size
         stride = self.stride
 
-        out_h = (H - pool_size) // stride + 1
-        out_w = (W - pool_size) // stride + 1
+        output_height = (input_height - pool_size) // stride + 1
+        output_width = (input_width - pool_size) // stride + 1
 
-        # compute mask for each window: shape (m, out_h, out_w, pool_size, pool_size, C)
+        # compute mask for each window: shape (m, output_height, output_width, pool_size, pool_size, num_input_channels)
         max_vals = cp.max(X_windows, axis=(3, 4), keepdims=True)
         mask = (X_windows == max_vals)
 
         # same shape as the windows.
-        dA_expanded = dZ[:, :, :, None, None, :]  # shape (m, out_h, out_w, 1, 1, C)
+        dA_expanded = dZ[:, :, :, None, None, :]  # shape (m, output_height, output_width, 1, 1, num_input_channels)
 
         # gradient contribution for each window.
-        dX_windows = mask * dA_expanded  # shape (m, out_h, out_w, pool_size, pool_size, C)
+        dX_windows = mask * dA_expanded  # shape (m, output_height, output_width, pool_size, pool_size, num_input_channels)
 
         dX = cp.zeros_like(X)
 
         # Scatter the gradients from each window back to dX.
         # Since pooling is non-overlapping, each window maps to a unique region in dX.
-        for i in range(out_h):
-            for j in range(out_w):
+        for i in range(output_height):
+            for j in range(output_width):
                 vert_start = i * stride
                 vert_end = vert_start + pool_size
                 horiz_start = j * stride
@@ -136,10 +133,10 @@ class MaxPool:
         creates a mask from the input matrix X
 
         Args:
-            X (np.ndarray): input matrix of shape (pool_size, pool_size)
+            X (cp.ndarray): input matrix of shape (pool_size, pool_size)
 
         Returns:
-            np.ndarray: mask of the same shape as X, contains a True at the position corresponding to the max value of X
+            cp.ndarray: mask of the same shape as X, contains a True at the position corresponding to the max value of X
         """
         return X == cp.max(X)
 
@@ -148,10 +145,10 @@ class MaxPool:
         backward pass of the pooling
 
         Args:
-            dZ (np.ndarray): gradient of the cost with respect to the output of the pooling layer - matrix of shape (m, input_height, input_width, num_input_channels)
+            dZ (cp.ndarray): gradient of the cost with respect to the output of the pooling layer - matrix of shape (m, input_height, input_width, num_input_channels)
 
         Returns:
-            dX (np.ndarray): gradient of the cost with respect to the input of the pooling layer - matrix of shape (m, input_height, input_width, num_input_channels)
+            dX (cp.ndarray): gradient of the cost with respect to the input of the pooling layer - matrix of shape (m, input_height, input_width, num_input_channels)
         """
         X = self.cache
         (m, input_height, input_width, num_input_channels) = dZ.shape

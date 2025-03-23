@@ -85,7 +85,7 @@ class Convolution:
 
         return cp.dot(X_col, filters) + self.biases.reshape(-1)  # (1, num_filters)
 
-    def convolve_forward_vectorized(self, X: cp.ndarray):
+    def convolve_forward(self, X: cp.ndarray):
         """
             convolves the input with the predefined filters
 
@@ -127,6 +127,53 @@ class Convolution:
         self.cache = (X, batch_cache)
 
         return Z
+
+    def convolve_forward_vectorized(self, X: cp.ndarray):
+        """
+        Convolves the input with the predefined filters using a vectorized approach.
+
+        Args:
+            X (cp.ndarray): Activations from the previous layer of shape (m, height, width, input_channels).
+
+        Returns:
+            Z (cp.ndarray): Convolution output of shape (m, output_height, output_width, num_filters).
+        """
+        (m, prev_height, prev_width, input_channels) = X.shape
+        filter_size = self.filters.shape[0]
+        num_filters = self.filters.shape[3]
+
+        output_height = int((prev_height - filter_size + 2 * self.padding) / self.stride) + 1
+        output_width = int((prev_width - filter_size + 2 * self.padding) / self.stride) + 1
+
+        X_padded = self.zero_pad(X)
+
+        # with this shape we will have matrix with each kernel window already extracted
+        shape = (m, output_height, output_width, filter_size, filter_size, input_channels)
+        strides = (X_padded.strides[0],
+                   X_padded.strides[1] * self.stride,
+                   X_padded.strides[2] * self.stride,
+                   X_padded.strides[1],
+                   X_padded.strides[2],
+                   X_padded.strides[3])
+        X_windows = cp.lib.stride_tricks.as_strided(X_padded, shape=shape, strides=strides)
+
+        # reshape the windows into columns (each row is a flattened patch). Has shape (m * output_height * output_width, filter_size * filter_size * input_channels)
+        X_col = X_windows.reshape(m * output_height * output_width, -1)
+
+        # reshape filters to columns. Has shape (filter_size * filter_size * input_channels, num_filters)
+        filters_col = self.filters.reshape(-1, num_filters)
+
+        # perform the convolution
+        conv_out = cp.dot(X_col, filters_col)  # (m * output_height * output_width, num_filters)
+
+        # reshape the result back to the output dimensions
+        conv_out = conv_out.reshape(m, output_height, output_width, num_filters)
+        conv_out += self.biases
+
+        conv_out, batch_cache = self._normalize_forward(conv_out)
+        self.cache = (X, batch_cache)
+
+        return conv_out
 
     def convolve_backward(self, dZ: cp.ndarray, learning_rate: float):
         """
@@ -193,11 +240,11 @@ class Convolution:
         backward propagation for a convolution function
 
         Args:
-            dZ (np.ndarray): gradient of the cost with respect to the output of the conv layer (Z), matrix shape (m, output_height, output_width, num_filters)
+            dZ (cp.ndarray): gradient of the cost with respect to the output of the conv layer (Z), matrix shape (m, output_height, output_width, num_filters)
             learning_rate (float): learning rate for the optimization
 
         Returns:
-            dX (np.ndarray): gradient of the input (X), matrix shape (m, height, width, input_channels)
+            dX (cp.ndarray): gradient of the input (X), matrix shape (m, height, width, input_channels)
         """
 
         X = self.cache[0]
@@ -249,16 +296,21 @@ class Convolution:
     def _normalize_backward(self, dZ):
         (Z, Z_norm, mean, variance) = self.cache[1]
         m = Z.shape[0]
+
         # Gradients scale (gamma) and shift (beta)
         dgamma = cp.sum(dZ * Z_norm, axis=(0, 1, 2), keepdims=True)
         dbeta = cp.sum(dZ, axis=(0, 1, 2), keepdims=True)
         dZ_norm = dZ * self.gamma
+
         # Gradient of variance
         dvar = cp.sum(dZ_norm * (Z - mean) * -0.5 * cp.power(variance + self.eps, -1.5), axis=0, keepdims=True)
+
         # Gradient of mean
         dmean = cp.sum(dZ_norm * -1 / cp.sqrt(variance + self.eps), axis=0, keepdims=True) + dvar * cp.mean(-2 * (Z - mean), axis=0, keepdims=True)
-        dX = dZ_norm / cp.sqrt(variance + self.eps) + dvar * 2 * (Z - mean) / m + dmean / m
-        return dX, dgamma, dbeta
+
+        dZ_norm /= cp.sqrt(variance + self.eps) + dvar * 2 * (Z - mean) / m + dmean / m
+
+        return dZ_norm, dgamma, dbeta
 
     def get_params(self, params: dict, key: str):
         params[f'{key}_filters'] = self.filters
@@ -288,38 +340,57 @@ class Convolution:
         self.running_mean = params[f'{key}_running_mean']
         self.running_variance = params[f'{key}_running_variance']
 
-# TODO make out what's happening here
+
 def _im2col(X, filter_height, filter_width, padding, stride):
     """
-    Rearranges image blocks into columns.
+    convert batch of images into the single matrix
+
     Args:
-        X (cp.ndarray): Input images of shape (N, H, W, C)
+        X (cp.ndarray): Input images of shape (m, height, width, num_channels)
         filter_height (int): Height of the filter.
         filter_width (int): Width of the filter.
         padding (int): Amount of zero-padding around each image.
         stride (int): Stride of the convolution.
     Returns:
         cols (cp.ndarray): 2D array of shape 
-            (filter_height * filter_width * C, N * out_height * out_width)
+            (filter_height * filter_width * num_channels, m * out_height * out_width)
     """
-    N, H, W, C = X.shape
-    H_padded, W_padded = H + 2 * padding, W + 2 * padding
+    _, height, weight, num_channels = X.shape
+
+    height_padded, width_padded = height + 2 * padding, weight + 2 * padding
     X_padded = cp.pad(X, ((0, 0), (padding, padding), (padding, padding), (0, 0)), mode='constant', constant_values=0)
-    out_height = (H_padded - filter_height) // stride + 1
-    out_width = (W_padded - filter_width) // stride + 1
-    # Compute indices for im2col
-    i0 = cp.repeat(cp.arange(filter_height), filter_width)
-    i0 = cp.tile(i0, C)
-    i1 = stride * cp.repeat(cp.arange(out_height), out_width)
-    j0 = cp.tile(cp.arange(filter_width), filter_height * C)
-    j1 = stride * cp.tile(cp.arange(out_width), out_height)
-    i = i0.reshape(-1, 1) + i1.reshape(1, -1)
-    j = j0.reshape(-1, 1) + j1.reshape(1, -1)
-    k = cp.repeat(cp.arange(C), filter_height * filter_width).reshape(-1, 1)
-    # Use advanced indexing to extract the patches
-    cols = X_padded[:, i, j, k]  # shape: (N, filter_height*filter_width*C, out_height*out_width)
-    cols = cols.transpose(1, 2, 0).reshape(filter_height * filter_width * C, -1)
+
+    # how many times the filter can "fit" in the padded image vertically and horizontally respectively
+    out_height = (height_padded - filter_height) // stride + 1
+    out_width = (width_padded - filter_width) // stride + 1
+
+    # row indices within a filter
+    row_indices = cp.repeat(cp.arange(filter_height), filter_width)  # [0, 0, 0, 1, 1, 1, 2, 2, 2, ...]
+    # extend indices to all channels
+    row_indices = cp.tile(row_indices, num_channels)  # [0, 0, 0, 1, 1, 1, 2, 2, 2, ...] * num_channels
+
+    # row offsets for each patch
+    row_offsets = stride * cp.repeat(cp.arange(out_height), out_width)
+
+    # column offsets for each patch
+    column_indices = cp.tile(cp.arange(filter_width), filter_height * num_channels)
+
+    # row offsets for each patch
+    column_offsets = stride * cp.tile(cp.arange(out_width), out_height)
+
+    # index in X_padded for every patch
+    rows = row_indices.reshape(-1, 1) + row_offsets.reshape(1, -1)
+    columns = column_indices.reshape(-1, 1) + column_offsets.reshape(1, -1)
+
+    # filter indices for every element in the filter patch
+    filter_indices = cp.repeat(cp.arange(num_channels), filter_height * filter_width).reshape(-1, 1)
+
+    # extract the patches
+    patches = X_padded[:, rows, columns, filter_indices]  # shape: (m, filter_height*filter_width*num_channels, out_height*out_width)
     
+    # rearranging the extracted patches into Columns
+    cols = patches.transpose(1, 2, 0).reshape(filter_height * filter_width * num_channels, -1)
+
     return cols
 
 
@@ -329,36 +400,48 @@ def _col2im(cols, X_shape, filter_height, filter_width, padding, stride):
     Args:
         cols (cp.ndarray): 2D array of shape 
             (filter_height * filter_width * C, N * out_height * out_width)
-        X_shape (tuple): Shape of the original input X, (N, H, W, C)
+        X_shape (tuple): Shape of the original input X, (m, height, width, num_channels)
         filter_height (int): Height of the filter.
         filter_width (int): Width of the filter.
         padding (int): Padding used in the forward pass.
         stride (int): Stride used in the forward pass.
     Returns:
-        X_reconstructed (cp.ndarray): Reconstructed images of shape (N, H, W, C)
+        X_reconstructed (cp.ndarray): Reconstructed images of shape (m, height, width, num_channels)
     """
-    N, H, W, C = X_shape
-    H_padded, W_padded = H + 2 * padding, W + 2 * padding
-    out_height = (H_padded - filter_height) // stride + 1
-    out_width = (W_padded - filter_width) // stride + 1
-    X_padded = cp.zeros((N, H_padded, W_padded, C), dtype=cols.dtype)
-    # Compute indices for im2col (same as in your _im2col)
-    i0 = cp.repeat(cp.arange(filter_height), filter_width)
-    i0 = cp.tile(i0, C)
-    i1 = stride * cp.repeat(cp.arange(out_height), out_width)
-    j0 = cp.tile(cp.arange(filter_width), filter_height * C)
-    j1 = stride * cp.tile(cp.arange(out_width), out_height)
-    i = i0.reshape(-1, 1) + i1.reshape(1, -1)        # shape: (F, out_height*out_width)
-    j = j0.reshape(-1, 1) + j1.reshape(1, -1)        # shape: (F, out_height*out_width)
-    k = cp.repeat(cp.arange(C), filter_height * filter_width).reshape(-1, 1)  # shape: (F, 1)
-    # Tile k so that it matches the shape of i and j:
-    k = cp.tile(k, (1, out_height * out_width))      # shape: (F, out_height*out_width)
-    # Reshape cols to (N, F, out_height*out_width)
-    cols_reshaped = cols.reshape(filter_height * filter_width * C, out_height * out_width, N)
+    (m, height, width, num_filters) = X_shape
+    height_padded, width_padded = height + 2 * padding, width + 2 * padding
+    
+    out_height = (height_padded - filter_height) // stride + 1
+    out_width = (width_padded - filter_width) // stride + 1
+    
+    X_padded = cp.zeros((m, height_padded, width_padded, num_filters), dtype=cols.dtype)
+    
+    # Compute indices for im2col (basically the same as in the _im2col)
+    row_indices = cp.repeat(cp.arange(filter_height), filter_width)
+    row_indices = cp.tile(row_indices, num_filters)
+    
+    row_offsets = stride * cp.repeat(cp.arange(out_height), out_width)
+    
+    column_indices = cp.tile(cp.arange(filter_width), filter_height * num_filters)
+    
+    column_offsets = stride * cp.tile(cp.arange(out_width), out_height)
+    
+    rows = row_indices.reshape(-1, 1) + row_offsets.reshape(1, -1)        
+    columns = column_indices.reshape(-1, 1) + column_offsets.reshape(1, -1)
+            
+    filter_indices = cp.repeat(cp.arange(num_filters), filter_height * filter_width).reshape(-1, 1)
+    
+    # tile to match the shape of rows and columns
+    filter_indices = cp.tile(filter_indices, (1, out_height * out_width))
+    
+    cols_reshaped = cols.reshape(filter_height * filter_width * num_filters, out_height * out_width, m)
     cols_reshaped = cols_reshaped.transpose(2, 0, 1)
+    
     # Accumulate the columns back into the image
-    for n in range(N):
-        cp.add.at(X_padded[n], (i, j, k), cols_reshaped[n])
+    for n in range(m):
+        cp.add.at(X_padded[n], (rows, columns, filter_indices), cols_reshaped[n])
+        
     if padding == 0:
         return X_padded
+    
     return X_padded[:, padding:-padding, padding:-padding, :]
