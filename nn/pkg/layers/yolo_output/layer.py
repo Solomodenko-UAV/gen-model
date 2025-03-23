@@ -151,9 +151,9 @@ class YoloOutput:
     def set_params(self, params: dict, key: str):
         self.weights = params[f'{key}_weights']
         self.biases = params[f'{key}_biases']
-        self.l2_lambda = params[f'{key}_l2_lambda']
-        self.clip_value = params[f'{key}_clip_value']
-        self.S = params[f'{key}_S']
-        self.B = params[f'{key}_B']
-        self.C = params[f'{key}_C']
-        self.out_per_cell = params[f'{key}_out_per_cell']
+        self.l2_lambda = params[f'{key}_l2_lambda'].item()
+        self.clip_value = params[f'{key}_clip_value'].item()
+        self.S = params[f'{key}_S'].item()
+        self.B = params[f'{key}_B'].item()
+        self.C = params[f'{key}_C'].item()
+        self.out_per_cell = params[f'{key}_out_per_cell'].item()

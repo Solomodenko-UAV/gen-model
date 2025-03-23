@@ -181,5 +181,5 @@ class MaxPool:
         return params
 
     def set_params(self, params: dict, key: str):
-        self.pool_size = params[f'{key}_pool_size']
-        self.stride = params[f'{key}_stride']
+        self.pool_size = params[f'{key}_pool_size'].item()
+        self.stride = params[f'{key}_stride'].item()

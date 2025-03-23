@@ -15,5 +15,6 @@ categories = {
     7: 'tricycle',
     8: 'awning_tricycle',
     9: 'bus',
-    10: 'motor'
+    10: 'motor',
+    11: 'others'
 }

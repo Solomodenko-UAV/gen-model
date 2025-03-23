@@ -58,7 +58,7 @@ class YOLOActorPhoto():
                 images = img_resized.reshape(1, *img_resized.shape)
 
                 if show_model_boxes:
-                    boxes_data = self.predict(images)
+                    boxes_data = cp.asnumpy(self.predict(cp.array(images)))
                     fig, ax = plt.subplots(1)
                     ax.imshow(img_resized)
                     for i in range(len(boxes_data)):
@@ -67,9 +67,11 @@ class YOLOActorPhoto():
                             x, y, w, h, obj_class, score = box
                             rect = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='r', facecolor='none')
                             ax.add_patch(rect)
+                            ax.text(x, y - 20, f"{visDrone.categories.get(int(obj_class))} {score:.2f}", color='r', fontsize=10, bbox=dict(facecolor='white', alpha=0.5))
 
                     # plt.axis('off')
                     plt.show()
+                    return
 
                 if evaluate:
                     annotations = _extract_visDrone_annotations(annotation_files[file_name])
@@ -146,12 +148,16 @@ class YOLOActorPhoto():
         resized_annotations_list = cp.zeros((len(img_files), self.model.S, self.model.S, self.model.B * 5 + self.model.C)).astype(np.float32)
         i = 0
 
-        for file_name, img_path in img_files.items():
+        for file_name, img_path in img_files.items():            
             img, img_resized = self._prepare_single_image(img_path)
             annotations_list = _extract_visDrone_annotations(annotation_files[file_name])
 
             resized_images[i] = img_resized
-            orig_annotations_list[i] = np.array(annotations_list).astype(np.float32)
+            
+            annotations_list = np.array(annotations_list).astype(np.float32)
+            annotations_list[:, visDrone.category_idx] -= 1 # categories are 1-indexed, but we need 0-indexed
+            
+            orig_annotations_list[i] = np.array(annotations_list).astype(np.float32)            
             resized_annotations_list[i] = cp.array(self._cook_annotations(orig_annotations_list[i], (img.shape[0], img.shape[1]), self.model_input_img_res))
 
             i += 1
@@ -161,10 +167,14 @@ class YOLOActorPhoto():
 
         return resized_images, resized_annotations_list, orig_annotations_list
 
-    def run_training_loop(self, epochs=10, learning_rate=0.01):
+    def run_training_loop(self, start_image_idx = 0, epochs=10, learning_rate=0.01):
+        start_epoch = start_image_idx // self.mini_batch_size
         losses = []
         for i in range(epochs):
             resized_images, resized_annotations, original_annotations = self.load_data_without_orig_image()
+            if i < start_epoch:
+                continue
+            
             if resized_images.shape[0] == 0:
                 print("No more data to train on")
                 return
@@ -248,7 +258,8 @@ class YOLOActorPhoto():
 
         # create one-hot encoding vector for the class
         class_targets = np.zeros((m, self.model.C))
-        class_targets[Y_norm[:, visDrone.category_idx].astype(np.int8)] = 1
+        categories = Y_norm[:, visDrone.category_idx].astype(np.int8)
+        class_targets[:, categories] = 1
 
         # construct output matrix - aka reshape annotations to the model output shape
         Y_target = np.zeros((self.model.S, self.model.S, self.model.B * 5 + self.model.C)).astype(np.float32)
@@ -426,7 +437,7 @@ class YOLOActorPhoto():
         mean_loss = loss / (m * S * S * C)
         return mean_loss, grad_A
 
-    def predict(self, images: np.ndarray):
+    def predict(self, images: cp.ndarray):
         """
         Predict the bounding boxes for the images
 
@@ -445,10 +456,10 @@ class YOLOActorPhoto():
         boxes_pred = boxes_pred.reshape(m, S, S, B, 5)
 
         classes_probs = model_output[..., B * 5:]  # shape (m, S, S, C)
-        predicted_class_indices = np.argmax(classes_probs, axis=-1)  # shape (m, S, S)
-        predicted_class_probabilities = np.max(classes_probs, axis=-1)  # shape (m, S, S)
+        predicted_class_indices = cp.argmax(classes_probs, axis=-1)  # shape (m, S, S)
+        predicted_class_probabilities = cp.max(classes_probs, axis=-1)  # shape (m, S, S)
 
-        boxes = np.zeros((m, S, S, B, 6))
+        boxes = cp.zeros((m, S, S, B, 6))
 
         cell_width = self.model_input_img_res[0] // S
         cell_height = self.model_input_img_res[1] // S
@@ -472,7 +483,7 @@ class YOLOActorPhoto():
                         obj_class = predicted_class_indices[i, row, col]
                         score = obj_class_probability * confidence
 
-                        boxes[i, row, col, b] = [x1, y1, w_abs, h_abs, obj_class, score]
+                        boxes[i, row, col, b, :] = cp.array([x1, y1, w_abs, h_abs, obj_class, score])
 
         return boxes.reshape(m, -1, boxes.shape[-1])
 
@@ -488,8 +499,8 @@ class YOLOActorPhoto():
             float: mean average precision
             dict: average precision per class
         """
-        boxes_pred = self.predict(images)
-        boxes_pred = _non_max_suppression(boxes_pred, iou_threshold=iou_threshold, score_threshold=score_threshold)
+        boxes_pred = self.predict(cp.array(images))
+        boxes_pred = _non_max_suppression(cp.asnumpy(boxes_pred), iou_threshold=iou_threshold, score_threshold=score_threshold)
 
         per_class_results = _calc_precision_recall(annotations, boxes_pred, iou_threshold)
         mAP, ap_per_class = _calculate_mean_average_precision(per_class_results)

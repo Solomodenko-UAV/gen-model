@@ -52,7 +52,7 @@ class MaxPool:
 
         return A
 
-    def as_strided(x, shape, strides):
+    def as_strided(self, x, shape, strides):
         return cp.ndarray(shape, dtype=x.dtype, memptr=x.data, strides=strides)
 
     # TODO: find out what is this
@@ -181,5 +181,5 @@ class MaxPool:
         return params
 
     def set_params(self, params: dict, key: str):
-        self.pool_size = params[f'{key}_pool_size']
-        self.stride = params[f'{key}_stride']
+        self.pool_size = params[f'{key}_pool_size'].item()
+        self.stride = params[f'{key}_stride'].item()

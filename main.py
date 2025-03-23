@@ -7,7 +7,7 @@ import platform
 
 
 # model = TinysimmoYOLOModel(model_path='model', S=4, B=2, C=1)
-model = TinysimmoYOLOModel(model_path='./model', S=4, B=2, C=10)  # TODO: rollback
+model = TinysimmoYOLOModel(model_path='./model', S=4, B=2, C=11)  # TODO: rollback
 
 model.create_new_model(
     image_size=(88, 88),
@@ -33,24 +33,27 @@ actor = YOLOActorPhoto(
     annotation_folder=annotation_folder,
     model_input_img_res=(88, 88),
     model=model,
-    mini_batch_size=8
-    # mini_batch_size=1
+    # mini_batch_size=8
+    mini_batch_size=1
 )
 
 def train():
     start_time = time.time()
-    # actor.run_training_loop(epochs=1, learning_rate=0.001)
-    actor.run_training_loop(epochs=40, learning_rate=0.001)
+    actor.run_training_loop(epochs=1, learning_rate=0.001)
+    # actor.run_training_loop(epochs=40, learning_rate=0.001, start_image_idx=0)
     elapsed_time = time.time() - start_time
     print(f"Training completed in {elapsed_time:.2f} seconds")
     model.save_model()
+    model.load_model()
     
 def test():
+    model.load_model()
     actor.func_for_tests(
-        # show_model_boxes=True,
-        evaluate=True,
+        show_model_boxes=True,
+        # evaluate=True,
         )
     
 train()
+# test()
     
 

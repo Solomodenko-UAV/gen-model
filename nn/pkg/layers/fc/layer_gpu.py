@@ -74,5 +74,5 @@ class FullyConnected:
     def set_params(self, params: dict, key: str):
         self.weights = params[f'{key}_weights']
         self.biases = params[f'{key}_biases']
-        self.l2_lambda = params[f'{key}_l2_lambda']
-        self.clip_value = params[f'{key}_clip_value']
+        self.l2_lambda = params[f'{key}_l2_lambda'].item()
+        self.clip_value = params[f'{key}_clip_value'].item()

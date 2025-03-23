@@ -85,7 +85,7 @@ class Convolution:
 
         return cp.dot(X_col, filters) + self.biases.reshape(-1)  # (1, num_filters)
 
-    def convolve_forward(self, X: cp.ndarray):
+    def convolve_forward_vectorized(self, X: cp.ndarray):
         """
             convolves the input with the predefined filters
 
@@ -201,27 +201,21 @@ class Convolution:
         """
 
         X = self.cache[0]
-        N, H, W, input_channels = X.shape
+        _, _, _, input_channels = X.shape
         filter_height, filter_width, _, output_filters = self.filters.shape
-        (_, output_height, output_width, _) = dZ.shape
-
-        dX = cp.zeros(X.shape)
-        dW = cp.zeros(self.filters.shape)
-        db = cp.zeros(self.biases.shape)
 
         dZ, dgamma, dbeta = self._normalize_backward(dZ)
-        
+
         X_cols = _im2col(X, filter_height, filter_width, self.padding, self.stride)  # shape: (filter_height*filter_width*C_in, N*out_height*out_width)
 
-                
-        dZ_reshaped = dZ.transpose(0, 3, 1, 2).reshape(output_filters, -1) # (C_out, N*out_height*out_width)
-        dW_cols = cp.dot(X_cols, dZ_reshaped.T) # (filter_height*filter_width*C_in, C_out)
+        dZ_reshaped = dZ.transpose(0, 3, 1, 2).reshape(output_filters, -1)  # (C_out, N*out_height*out_width)
+        dW_cols = cp.dot(X_cols, dZ_reshaped.T)  # (filter_height*filter_width*C_in, C_out)
         dW = dW_cols.reshape(filter_height, filter_width, input_channels, output_filters)
-        
+
         filters_reshaped = self.filters.reshape(-1, output_filters)  # (filter_height*filter_width*C_in, C_out)
         dX_cols = cp.dot(filters_reshaped, dZ_reshaped)  # (filter_height*filter_width*C_in, N*out_height*out_width)
         dX = _col2im(dX_cols, X.shape, filter_height, filter_width, self.padding, self.stride)
-        
+
         db = cp.sum(dZ, axis=(0, 1, 2), keepdims=True)
 
         dW = cp.clip(dW, -self.clip_value, self.clip_value)
@@ -234,9 +228,67 @@ class Convolution:
         self.beta -= learning_rate * dbeta
 
         return dX
-        
-    
-     # TODO make out what's happening here
+
+    def _normalize_forward(self, Z: cp.ndarray):
+        """
+        batch normalization
+        Args:
+            X (cp.ndarray): input to the convolution layer - matrix of shape (m, height, width, num_filters)
+        Returns:
+            cp.ndarray: normalized input
+        """
+        mean = cp.mean(Z, axis=(0, 1, 2), keepdims=True)
+        variance = cp.var(Z, axis=(0, 1, 2), keepdims=True)
+        Z_norm = (Z - mean) / cp.sqrt(variance + self.eps)
+        out = self.gamma * Z_norm + self.beta
+        self.running_mean = self.momentum * self.running_mean + (1 - self.momentum) * mean
+        self.running_variance = self.momentum * self.running_variance + (1 - self.momentum) * variance
+        cache = (Z, Z_norm, mean, variance)
+        return out, cache
+
+    def _normalize_backward(self, dZ):
+        (Z, Z_norm, mean, variance) = self.cache[1]
+        m = Z.shape[0]
+        # Gradients scale (gamma) and shift (beta)
+        dgamma = cp.sum(dZ * Z_norm, axis=(0, 1, 2), keepdims=True)
+        dbeta = cp.sum(dZ, axis=(0, 1, 2), keepdims=True)
+        dZ_norm = dZ * self.gamma
+        # Gradient of variance
+        dvar = cp.sum(dZ_norm * (Z - mean) * -0.5 * cp.power(variance + self.eps, -1.5), axis=0, keepdims=True)
+        # Gradient of mean
+        dmean = cp.sum(dZ_norm * -1 / cp.sqrt(variance + self.eps), axis=0, keepdims=True) + dvar * cp.mean(-2 * (Z - mean), axis=0, keepdims=True)
+        dX = dZ_norm / cp.sqrt(variance + self.eps) + dvar * 2 * (Z - mean) / m + dmean / m
+        return dX, dgamma, dbeta
+
+    def get_params(self, params: dict, key: str):
+        params[f'{key}_filters'] = self.filters
+        params[f'{key}_biases'] = self.biases
+        params[f'{key}_stride'] = self.stride
+        params[f'{key}_padding'] = self.padding
+        params[f'{key}_l2_lambda'] = self.l2_lambda
+        params[f'{key}_clip_value'] = self.clip_value
+        params[f'{key}_momentum'] = self.momentum
+        params[f'{key}_gamma'] = self.gamma
+        params[f'{key}_beta'] = self.beta
+        params[f'{key}_eps'] = self.eps
+        params[f'{key}_running_mean'] = self.running_mean
+        params[f'{key}_running_variance'] = self.running_variance
+
+    def set_params(self, params: dict, key: str):
+        self.filters = params[f'{key}_filters']
+        self.biases = params[f'{key}_biases']
+        self.stride = params[f'{key}_stride'].item()
+        self.padding = params[f'{key}_padding'].item()
+        self.l2_lambda = params[f'{key}_l2_lambda'].item()
+        self.clip_value = params[f'{key}_clip_value'].item()
+        self.momentum = params[f'{key}_momentum'].item()
+        self.gamma = params[f'{key}_gamma']
+        self.beta = params[f'{key}_beta']
+        self.eps = params[f'{key}_eps'].item()
+        self.running_mean = params[f'{key}_running_mean']
+        self.running_variance = params[f'{key}_running_variance']
+
+# TODO make out what's happening here
 def _im2col(X, filter_height, filter_width, padding, stride):
     """
     Rearranges image blocks into columns.
@@ -267,7 +319,9 @@ def _im2col(X, filter_height, filter_width, padding, stride):
     # Use advanced indexing to extract the patches
     cols = X_padded[:, i, j, k]  # shape: (N, filter_height*filter_width*C, out_height*out_width)
     cols = cols.transpose(1, 2, 0).reshape(filter_height * filter_width * C, -1)
+    
     return cols
+
 
 def _col2im(cols, X_shape, filter_height, filter_width, padding, stride):
     """
@@ -308,62 +362,3 @@ def _col2im(cols, X_shape, filter_height, filter_width, padding, stride):
     if padding == 0:
         return X_padded
     return X_padded[:, padding:-padding, padding:-padding, :]
-
-def _normalize_forward(self, Z: cp.ndarray):
-    """
-    batch normalization
-    Args:
-        X (cp.ndarray): input to the convolution layer - matrix of shape (m, height, width, num_filters)
-    Returns:
-        cp.ndarray: normalized input
-    """
-    mean = cp.mean(Z, axis=(0, 1, 2), keepdims=True)
-    variance = cp.var(Z, axis=(0, 1, 2), keepdims=True)
-    Z_norm = (Z - mean) / cp.sqrt(variance + self.eps)
-    out = self.gamma * Z_norm + self.beta
-    self.running_mean = self.momentum * self.running_mean + (1 - self.momentum) * mean
-    self.running_variance = self.momentum * self.running_variance + (1 - self.momentum) * variance
-    cache = (Z, Z_norm, mean, variance)
-    return out, cache
-
-def _normalize_backward(self, dZ):
-    (Z, Z_norm, mean, variance) = self.cache[1]
-    m = Z.shape[0]
-    # Gradients scale (gamma) and shift (beta)
-    dgamma = cp.sum(dZ * Z_norm, axis=(0, 1, 2), keepdims=True)
-    dbeta = cp.sum(dZ, axis=(0, 1, 2), keepdims=True)
-    dZ_norm = dZ * self.gamma
-    # Gradient of variance
-    dvar = cp.sum(dZ_norm * (Z - mean) * -0.5 * cp.power(variance + self.eps, -1.5), axis=0, keepdims=True)
-    # Gradient of mean
-    dmean = cp.sum(dZ_norm * -1 / cp.sqrt(variance + self.eps), axis=0, keepdims=True) + dvar * cp.mean(-2 * (Z - mean), axis=0, keepdims=True)
-    dX = dZ_norm / cp.sqrt(variance + self.eps) + dvar * 2 * (Z - mean) / m + dmean / m
-    return dX, dgamma, dbeta
-
-def get_params(self, params: dict, key: str):
-    params[f'{key}_filters'] = self.filters
-    params[f'{key}_biases'] = self.biases
-    params[f'{key}_stride'] = self.stride
-    params[f'{key}_padding'] = self.padding
-    params[f'{key}_l2_lambda'] = self.l2_lambda
-    params[f'{key}_clip_value'] = self.clip_value
-    params[f'{key}_momentum'] = self.momentum
-    params[f'{key}_gamma'] = self.gamma
-    params[f'{key}_beta'] = self.beta
-    params[f'{key}_eps'] = self.eps
-    params[f'{key}_running_mean'] = self.running_mean
-    params[f'{key}_running_variance'] = self.running_variance
-    
-def set_params(self, params: dict, key: str):
-    self.filters = params[f'{key}_filters']
-    self.biases = params[f'{key}_biases']
-    self.stride = params[f'{key}_stride']
-    self.padding = params[f'{key}_padding']
-    self.l2_lambda = params[f'{key}_l2_lambda']
-    self.clip_value = params[f'{key}_clip_value']
-    self.momentum = params[f'{key}_momentum']
-    self.gamma = params[f'{key}_gamma']
-    self.beta = params[f'{key}_beta']
-    self.eps = params[f'{key}_eps']
-    self.running_mean = params[f'{key}_running_mean']
-    self.running_variance = params[f'{key}_running_variance']
