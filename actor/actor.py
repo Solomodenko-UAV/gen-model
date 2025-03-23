@@ -115,27 +115,65 @@ class YOLOActorPhoto():
 
             I.append(np.array(img))
             IR[i] = img_resized
-            annotations_list[i] = np.array(annotations).astype(np.float64)
+            annotations_list[i] = np.array(annotations).astype(np.float32)
             i += 1
 
         print(f"Loaded images from {self.data_idx} to {self.data_idx + self.mini_batch_size} idx")
         self.data_idx += self.mini_batch_size
 
-        return np.array(I).astype(np.float64), IR, annotations_list
+        return np.array(I).astype(np.float32), IR, annotations_list
+
+    def load_data_without_orig_image(self):
+        """
+        Load the data from the data folder
+
+        Returns:
+            tuple: tuple containing the images and the annotations.
+                    Images are of shape (m, height, width, num_channels) and
+                    annotations are of shape (m, n, 8)
+        """
+        entries = os.listdir(self.data_folder)[self.data_idx:self.data_idx + self.mini_batch_size]
+        img_files = {}
+        annotation_files = {}
+        for entry in entries:
+            file_name = entry.split('.')[0]
+            img_files[file_name] = os.path.join(self.data_folder, entry)
+            annotation_files[file_name] = os.path.join(self.annotation_folder, file_name + '.txt')
+
+        resized_images = np.zeros((len(img_files), *self.model_input_img_res, 3))
+
+        orig_annotations_list = [[] for _ in range(len(img_files))]
+        resized_annotations_list = cp.zeros((len(img_files), self.model.S, self.model.S, self.model.B * 5 + self.model.C)).astype(np.float32)
+        i = 0
+
+        for file_name, img_path in img_files.items():
+            img, img_resized = self._prepare_single_image(img_path)
+            annotations_list = _extract_visDrone_annotations(annotation_files[file_name])
+
+            resized_images[i] = img_resized
+            orig_annotations_list[i] = np.array(annotations_list).astype(np.float32)
+            resized_annotations_list[i] = cp.array(self._cook_annotations(orig_annotations_list[i], (img.shape[0], img.shape[1]), self.model_input_img_res))
+
+            i += 1
+
+        print(f"Loaded images from {self.data_idx} to {self.data_idx + self.mini_batch_size} idx")
+        self.data_idx += self.mini_batch_size
+
+        return resized_images, resized_annotations_list, orig_annotations_list
 
     def run_training_loop(self, epochs=10, learning_rate=0.01):
         losses = []
         for i in range(epochs):
-            original_images, resized_images, annotations = self.load_data()
+            resized_images, resized_annotations, original_annotations = self.load_data_without_orig_image()
             if resized_images.shape[0] == 0:
                 print("No more data to train on")
                 return
 
             Y = self.model.forward(cp.asarray(resized_images))
+
             loss = self.train_on_multiple_images(
-                Y=cp.asnumpy(Y),
-                Y_hat=annotations,
-                original_img_shape=(original_images[0].shape[0], original_images[0].shape[1]),
+                Y=Y,
+                Y_hat=resized_annotations,
                 learning_rate=learning_rate
             )
 
@@ -149,12 +187,11 @@ class YOLOActorPhoto():
         plt.title("Training Loss Over Epochs")
         plt.legend()
         plt.grid(True)
-        # plt.show()
+        plt.show()
 
     def train_on_multiple_images(self,
                                  Y: np.ndarray,
                                  Y_hat: list,
-                                 original_img_shape: tuple,
                                  learning_rate: float):
         """
         Calculate the loss
@@ -167,13 +204,9 @@ class YOLOActorPhoto():
         Returns:
             loss(float): loss value
         """
-
-        Y_target = np.zeros((len(Y_hat), self.model.S, self.model.S, self.model.B * 5 + self.model.C))
-        for i in range(len(Y_hat)):
-            Y_target[i] = self._cook_annotations(Y_hat[i], original_img_shape, self.model_input_img_res)
-
-        loss, grad_A = self._calc_loss_and_gradient(Y, Y_target)
-        self.model.backward(cp.asarray(grad_A), learning_rate)
+        # loss, grad_A = self._calc_loss_and_gradient(Y, Y_target)
+        loss, grad_A = self._calc_loss_and_gradient_on_gpu(Y, cp.asarray(Y_hat))
+        self.model.backward(grad_A, learning_rate)
 
         return loss
 
@@ -218,7 +251,7 @@ class YOLOActorPhoto():
         class_targets[Y_norm[:, visDrone.category_idx].astype(np.int8)] = 1
 
         # construct output matrix - aka reshape annotations to the model output shape
-        Y_target = np.zeros((self.model.S, self.model.S, self.model.B * 5 + self.model.C))
+        Y_target = np.zeros((self.model.S, self.model.S, self.model.B * 5 + self.model.C)).astype(np.float32)
 
         for i in range(m):
             cell_x = int(cells_x[i])
@@ -240,6 +273,82 @@ class YOLOActorPhoto():
             Y_target[cell_y, cell_x, self.model.B * 5:] = class_targets[i]
 
         return Y_target
+
+    def _calc_loss_and_gradient_on_gpu(self, A: cp.ndarray, Y_target: cp.ndarray):
+        """
+        Calculate the loss and gradient
+
+        Args:
+            A (np.ndarray): predicted values - matrix of shape (m, S, S, B*5+C). For this function m == 1 is required
+            Y_target (np.ndarray): true values - matrix of shape (m, S, S, B*5+C)
+
+        Returns:
+            mean_loss(float): mean loss value over the image
+            grad_A(np.ndarray): gradient of the loss with respect to A - matrix of shape (m, S, S, B*5+C)
+        """
+        loss = 0.0
+        grad_A = np.zeros_like(A)
+
+        # Constants for loss weighting
+        lambda_coord = 5.0
+        lambda_noobj = 0.5
+
+        m, S, _, total = A.shape
+        B = self.model.B
+        C = self.model.C
+
+        for i in range(m):
+            for row in range(S):
+                for col in range(S):
+                    prediction = A[i, row, col]  # [B * 5 + C] array
+                    target = Y_target[i, row, col]
+
+                    # for each bounding box predictor in this cell
+                    for b in range(B):
+                        idx = b * 5
+                        pred_bbox = prediction[idx:idx+5]  # [6] array
+                        target_bbox = target[idx:idx+5]
+
+                        # if model thinks there is no object in this box
+                        if target_bbox[visDrone.object_existence_idx] == 0:
+                            conf_diff = pred_bbox[visDrone.object_existence_idx]
+                            loss += lambda_noobj * (conf_diff ** 2)
+                            grad_A[i, row, col, idx + visDrone.object_existence_idx] = 2 * lambda_noobj * conf_diff
+                            continue
+
+                        # if model thinks there is an object in this box
+                        # localization loss for x, y
+                        # calc squared error
+                        for j in range(visDrone.top_left_y_idx + 1):
+                            diff = pred_bbox[j] - target_bbox[j]
+                            loss += lambda_coord * (diff ** 2)
+                            grad_A[i, row, col, idx + j] = 2 * lambda_coord * diff
+
+                        # for width and height, apply square root transformation to stabilize small boxes
+                        for j in range(visDrone.width_idx, visDrone.height_idx + 1):
+                            # avoid division by zero
+                            pred_sqrt = cp.sqrt(cp.maximum(pred_bbox[j], 1e-6))
+                            target_sqrt = cp.sqrt(target_bbox[j])
+
+                            diff = pred_sqrt - target_sqrt
+                            loss += lambda_coord * (diff ** 2)
+                            # derivative of sqrt (that we've just applied couple lines above) is 1/(2*sqrt(x))
+                            grad_A[i, row, col, idx+j] = 2 * lambda_coord * diff * (1/(2*cp.sqrt(cp.maximum(pred_bbox[j], 1e-6))))
+
+                        # confidence loss
+                        conf_diff = pred_bbox[visDrone.object_existence_idx] - target_bbox[visDrone.object_existence_idx]
+                        loss += (conf_diff ** 2)
+                        grad_A[i, row, col, idx + visDrone.object_existence_idx] = 2 * conf_diff
+
+                        # classification loss
+                        pred_class = prediction[B * 5:]  # [C] array
+                        target_class = target[B * 5:]
+                        class_diff = pred_class - target_class
+                        loss += cp.sum(class_diff ** 2)
+                        grad_A[i, row, col, B * 5:] = 2 * class_diff
+
+        mean_loss = loss / (m * S * S * C)
+        return mean_loss.item(), grad_A
 
     def _calc_loss_and_gradient(self, A: np.ndarray, Y_target: np.ndarray):
         """

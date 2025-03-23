@@ -172,8 +172,8 @@ class YOLOActorPhoto():
         for i in range(len(Y_hat)):
             Y_target[i] = self._cook_annotations(Y_hat[i], original_img_shape, self.model_input_img_res)
 
-        loss, grad_A = self._calc_loss_and_gradient(Y, Y_target)
-        # loss, grad_A = self._calc_loss_and_gradient_on_gpu(Y, cp.asarray(Y_target))
+        # loss, grad_A = self._calc_loss_and_gradient(Y, Y_target)
+        loss, grad_A = self._calc_loss_and_gradient_on_gpu(Y, cp.asarray(Y_target))
         self.model.backward(grad_A, learning_rate)
 
         return loss
