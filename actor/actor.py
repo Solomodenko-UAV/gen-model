@@ -32,7 +32,7 @@ class YOLOActorPhoto():
         self.default_bounding_box_offsets = np.array([[0.5, 0.5] for _ in range(model.B)])
         self._find_out_default_anchors()
 
-    def func_for_tests(self, show_model_boxes=False, evaluate=False):
+    def func_for_tests(self, print_shrunk_image=False, print_orig_image=False, evaluate=False, iou_threshold: float = 0.5, score_threshold: float = 0.5):
         entries = os.listdir(self.data_folder)
         img_files = {}
         annotation_files = {}
@@ -64,22 +64,42 @@ class YOLOActorPhoto():
                 img, img_resized = self._prepare_single_image(img_path)
                 images = img_resized.reshape(1, *img_resized.shape)
 
-                if show_model_boxes:
+                if print_shrunk_image or print_orig_image:
                     if on_cpu:
-                        boxes_data = self.predict(images)
+                        boxes_data = self.predict(images, iou_threshold, score_threshold)
                     else:
-                        boxes_data = cp.asnumpy(self.predict(cp.array(images)))
-                    _, ax = plt.subplots(1)
-                    ax.imshow(img_resized)
-                    for i in range(len(boxes_data)):
-                        boxes_per_image = boxes_data[i]
-                        for box in boxes_per_image:
-                            x, y, w, h, obj_class, score = box
-                            rect = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='r', facecolor='none')
-                            ax.add_patch(rect)
-                            ax.text(x, y - 20, f"{visDrone.categories.get(int(obj_class))} {score:.2f}", color='r', fontsize=10, bbox=dict(facecolor='white', alpha=0.5))
+                        boxes_data = cp.asnumpy(self.predict(cp.array(images), iou_threshold, score_threshold))
 
-                    # plt.axis('off')
+                    _, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
+
+                    if print_shrunk_image:
+                        ax1.imshow(img_resized)
+                        ax1.set_title("Resized Image")
+
+                        for i in range(len(boxes_data)):
+                            boxes_per_image = boxes_data[i]
+                            for box in boxes_per_image:
+                                x, y, w, h, obj_class, score = box
+                                rect = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='r', facecolor='none')
+                                ax1.add_patch(rect)
+                                ax1.text(x, y - 20, f"{visDrone.categories.get(int(obj_class))} {score:.2f}", color='r', fontsize=10, bbox=dict(facecolor='white', alpha=0.5))
+
+                    if print_orig_image:
+                        ax2.imshow(img)
+                        ax2.set_title("Original Image")
+                        boxes_data = _upscale_predicted_boxes(boxes_data, img.shape[0] // img_resized.shape[0], img.shape[1] // img_resized.shape[1])
+
+                        for i in range(len(boxes_data)):
+                            boxes_per_image = boxes_data[i]
+                            for box in boxes_per_image:
+                                x, y, w, h, obj_class, score = box
+                                rect = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='b', facecolor='none')
+                                ax2.add_patch(rect)
+                                ax2.text(x, y - 20, f"{visDrone.categories.get(int(obj_class))} {score:.2f}", color='b', fontsize=10, bbox=dict(facecolor='white', alpha=0.5))
+
+                    plt.tight_layout()
+
+                    plt.axis('off')
                     plt.show()
                     return
 
@@ -227,8 +247,7 @@ class YOLOActorPhoto():
         Returns:
             loss(float): loss value
         """
-        # loss, grad_A = self._calc_loss_and_gradient(Y, Y_target)
-        loss, grad_A = self._calc_loss_and_gradient_on_gpu(Y, cp.asarray(Y_hat))
+        loss, grad_A = self._calc_loss_and_gradient(Y, cp.asarray(Y_hat))
         self.model.backward(grad_A, learning_rate)
 
         return loss
@@ -300,7 +319,7 @@ class YOLOActorPhoto():
 
         return Y_target
 
-    def _calc_loss_and_gradient_on_gpu(self, A: cp.ndarray, Y_target: cp.ndarray):
+    def _calc_loss_and_gradient(self, A: cp.ndarray, Y_target: cp.ndarray):
         """
         Calculate the loss and gradient
 
@@ -376,83 +395,7 @@ class YOLOActorPhoto():
         mean_loss = loss / (m * S * S * C)
         return mean_loss.item(), grad_A
 
-    def _calc_loss_and_gradient(self, A: np.ndarray, Y_target: np.ndarray):
-        """
-        Calculate the loss and gradient
-
-        Args:
-            A (np.ndarray): predicted values - matrix of shape (m, S, S, B*5+C). For this function m == 1 is required
-            Y_target (np.ndarray): true values - matrix of shape (m, S, S, B*5+C)
-
-        Returns:
-            mean_loss(float): mean loss value over the image
-            grad_A(np.ndarray): gradient of the loss with respect to A - matrix of shape (m, S, S, B*5+C)
-        """
-        loss = 0.0
-        grad_A = np.zeros_like(A)
-
-        # Constants for loss weighting
-        lambda_coord = 5.0
-        lambda_noobj = 0.5
-
-        m, S, _, _ = A.shape
-        B = self.model.B
-        C = self.model.C
-
-        for i in range(m):
-            for row in range(S):
-                for col in range(S):
-                    prediction = A[i, row, col]  # [B * 5 + C] array
-                    target = Y_target[i, row, col]
-
-                    # for each bounding box predictor in this cell
-                    for b in range(B):
-                        idx = b * 5
-                        pred_bbox = prediction[idx:idx+5]  # [6] array
-                        target_bbox = target[idx:idx+5]
-
-                        # if model thinks there is no object in this box
-                        if target_bbox[visDrone.object_existence_idx] == 0:
-                            conf_diff = pred_bbox[visDrone.object_existence_idx]
-                            loss += lambda_noobj * (conf_diff ** 2)
-                            grad_A[i, row, col, idx + visDrone.object_existence_idx] = 2 * lambda_noobj * conf_diff
-                            continue
-
-                        # if model thinks there is an object in this box
-                        # localization loss for x, y
-                        # calc squared error
-                        for j in range(visDrone.top_left_y_idx + 1):
-                            diff = pred_bbox[j] - target_bbox[j]
-                            loss += lambda_coord * (diff ** 2)
-                            grad_A[i, row, col, idx + j] = 2 * lambda_coord * diff
-
-                        # for width and height, apply square root transformation to stabilize small boxes
-                        for j in range(visDrone.width_idx, visDrone.height_idx + 1):
-                            # avoid division by zero
-                            pred_sqrt = np.sqrt(np.maximum(pred_bbox[j], 1e-6))
-                            target_sqrt = np.sqrt(target_bbox[j])
-
-                            diff = pred_sqrt - target_sqrt
-                            loss += lambda_coord * (diff ** 2)
-                            # derivative of sqrt (that we've just applied couple lines above) is 1/(2*sqrt(x))
-                            grad_A[i, row, col, idx+j] = 2 * lambda_coord * diff * (1/(2*np.sqrt(np.maximum(pred_bbox[j], 1e-6))))
-
-                        # confidence loss
-                        conf_diff = pred_bbox[visDrone.object_existence_idx] - target_bbox[visDrone.object_existence_idx]
-                        loss += (conf_diff ** 2)
-                        grad_A[i, row, col, idx + visDrone.object_existence_idx] = 2 * conf_diff
-
-                        # classification loss
-                        pred_class = prediction[B * 5:]  # [C] array
-                        target_class = target[B * 5:]
-                        class_diff = pred_class - target_class
-                        loss += np.sum(class_diff ** 2)
-                        grad_A[i, row, col, B * 5:] = 2 * class_diff
-
-        mean_loss = loss / (m * S * S * C)
-        return mean_loss, grad_A
-
-    def predict(self, images: cp.ndarray):
+    def predict(self, images: cp.ndarray, iou_threshold: float = 0.5, score_threshold: float = 0.5):
         """
         Predict the bounding boxes for the images
 
@@ -500,7 +443,14 @@ class YOLOActorPhoto():
 
                         boxes[i, row, col, b, :] = cp.array([x1, y1, w_abs, h_abs, obj_class, score])
 
-        return boxes.reshape(m, -1, boxes.shape[-1])
+        predicted_boxes = boxes.reshape(m, -1, boxes.shape[-1])
+
+        if on_cpu:
+            predicted_boxes = _non_max_suppression(predicted_boxes, iou_threshold=iou_threshold, score_threshold=score_threshold)
+        else:
+            predicted_boxes = _non_max_suppression(cp.asnumpy(predicted_boxes), iou_threshold=iou_threshold, score_threshold=score_threshold)
+
+        return predicted_boxes
 
     def evaluate_model(self, images: np.ndarray, annotations: list, iou_threshold: float = 0.5, score_threshold: float = 0.5):
         """
@@ -514,14 +464,11 @@ class YOLOActorPhoto():
             float: mean average precision
             dict: average precision per class
         """
-        boxes_pred = self.predict(cp.array(images))
-        if on_cpu:
-            boxes_pred = _non_max_suppression(boxes_pred, iou_threshold=iou_threshold, score_threshold=score_threshold)
-        else:
-            boxes_pred = _non_max_suppression(cp.asnumpy(boxes_pred), iou_threshold=iou_threshold, score_threshold=score_threshold)
+        boxes_pred = self.predict(cp.array(images), iou_threshold, score_threshold)
 
         per_class_results = _calc_precision_recall(annotations, boxes_pred, iou_threshold)
         mAP, ap_per_class = _calculate_mean_average_precision(per_class_results)
+
         return mAP, ap_per_class
 
     def _prepare_single_image(self, img_path: str):
@@ -577,6 +524,26 @@ def _downscale_img(image: np.ndarray, new_shape: tuple):
     reshaped = image_cropped.reshape(new_height, factor_H, new_width, factor_W, image.shape[2])
 
     return reshaped.mean(axis=(1, 3)).astype(np.uint8)
+
+
+def _upscale_predicted_boxes(boxes: np.ndarray, factor_H: int, factor_W: int):
+    """
+    Downscale the annotation to the new shape
+
+    Args:
+        boxes(np.ndarray): predicted bounding boxes - matrix of shape (m, S * S * B, 6), represents a batch of m images. Each box is [x, y, w, h, class, score]
+
+    Returns:
+        upscaled_boxes(np.ndarray): predicted bounding boxes - matrix of shape (m, S * S * B, 6), represents a batch of m images. Each box is [x, y, w, h, class, score]
+    """
+
+    upscaled_boxes = cp.copy(boxes)
+    upscaled_boxes[:, :, 0] *= factor_W
+    upscaled_boxes[:, :, 1] *= factor_H
+    upscaled_boxes[:, :, 2] *= factor_W
+    upscaled_boxes[:, :, 3] *= factor_H
+    
+    return upscaled_boxes
 
 
 def _downscale_annotation(annotations: list, factor_H: int, factor_W: int):

@@ -35,6 +35,7 @@ actor = YOLOActorPhoto(
     # mini_batch_size=1
 )
 
+
 def train():
     start_time = time.time()
     # actor.run_training_loop(epochs=1, learning_rate=0.001)
@@ -44,18 +45,24 @@ def train():
     # model.save_model()
     # model.load_model()
     actor.func_for_tests(
-        show_model_boxes=True,
+        print_shrunk_image=True,
+        print_orig_image=True,
         # evaluate=True,
-        )
-    
+        iou_threshold=0.5,
+        score_threshold=0.5,
+    )
+
+
 def test():
     model.load_model()
     actor.func_for_tests(
-        show_model_boxes=True,
+        print_shrunk_image=True,
+        print_orig_image=True,
         # evaluate=True,
-        )
-    
-train()
-# test()
-    
+        iou_threshold=0.5,
+        score_threshold=0.5,
+    )
 
+
+# train()
+test()
