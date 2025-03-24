@@ -4,4 +4,4 @@ run_on_cpu:
 
 run_on_gpu:
 	echo "Running on GPU"
-	USE_GPU=True python main.py
+	set USE_GPU=True && python main.py

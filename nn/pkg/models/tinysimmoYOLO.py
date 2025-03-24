@@ -1,12 +1,11 @@
 
 import os
 
-on_cpu = os.environ.get("USE_GPU") != False
+on_cpu = os.environ.get("USE_GPU") != False and os.environ.get("USE_GPU") != 'True'
 
 if on_cpu:
     import numpy as cp
 else:
-    print(os.environ.get("USE_GPU"))
     import cupy as cp
     
 import numpy as np

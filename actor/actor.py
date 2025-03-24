@@ -6,7 +6,7 @@ from PIL import Image
 import numpy as np
 import os
 
-on_cpu = os.environ.get("USE_GPU") != False
+on_cpu = os.environ.get("USE_GPU") != False and os.environ.get("USE_GPU") != 'True' and os.environ.get("USE_GPU") != 'True'
 
 if on_cpu:
     import numpy as cp
@@ -29,8 +29,6 @@ class YOLOActorPhoto():
         self.model = model
         self.mini_batch_size = mini_batch_size
         self.data_idx = 0
-        self.default_bounding_box_offsets = np.array([[0.5, 0.5] for _ in range(model.B)])
-        self._find_out_default_anchors()
 
     def func_for_tests(self, print_shrunk_image=False, print_orig_image=False, evaluate=False, iou_threshold: float = 0.5, score_threshold: float = 0.5):
         entries = os.listdir(self.data_folder)
@@ -82,7 +80,7 @@ class YOLOActorPhoto():
                                 x, y, w, h, obj_class, score = box
                                 rect = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='r', facecolor='none')
                                 ax1.add_patch(rect)
-                                ax1.text(x, y - 20, f"{visDrone.categories.get(int(obj_class))} {score:.2f}", color='r', fontsize=10, bbox=dict(facecolor='white', alpha=0.5))
+                                # ax1.text(x, y - 20, f"{visDrone.categories.get(int(obj_class))} {score:.2f}", color='r', fontsize=10, bbox=dict(facecolor='white', alpha=0.5))
 
                     if print_orig_image:
                         ax2.imshow(img)
@@ -95,7 +93,7 @@ class YOLOActorPhoto():
                                 x, y, w, h, obj_class, score = box
                                 rect = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='b', facecolor='none')
                                 ax2.add_patch(rect)
-                                ax2.text(x, y - 20, f"{visDrone.categories.get(int(obj_class))} {score:.2f}", color='b', fontsize=10, bbox=dict(facecolor='white', alpha=0.5))
+                                # ax2.text(x, y - 20, f"{visDrone.categories.get(int(obj_class))} {score:.2f}", color='b', fontsize=10, bbox=dict(facecolor='white', alpha=0.5))
 
                     plt.tight_layout()
 
@@ -163,7 +161,7 @@ class YOLOActorPhoto():
                     Images are of shape (m, height, width, num_channels) and
                     annotations are of shape (m, n, 8)
         """
-        entries = os.listdir(self.data_folder)[self.data_idx:self.data_idx + self.mini_batch_size]
+        entries = os.listdir(self.data_folder)[self.data_idx:self.data_idx + self.mini_batch_size]        
         img_files = {}
         annotation_files = {}
         for entry in entries:
@@ -196,9 +194,15 @@ class YOLOActorPhoto():
         return resized_images, resized_annotations_list, orig_annotations_list
 
     def run_training_loop(self, start_image_idx=0, epochs=10, learning_rate=0.01):
+        if epochs == -1:
+            epochs = int(np.ceil(len(os.listdir(self.data_folder)) / 10))
+            
         if not hasattr(self, "default_bounding_box_offsets"):
             self._find_out_default_anchors()
 
+        print("Starting training loop")
+        print("number of epochs: ", epochs)
+        
         start_epoch = start_image_idx // self.mini_batch_size
         losses = []
         for i in range(epochs):
@@ -221,7 +225,7 @@ class YOLOActorPhoto():
 
             losses.append(loss)
 
-            if i % 10 == 0:
+            if i % (epochs * 0.1) == 0: # each 10%
                 print(f"Epoch {i}, loss: {loss}")
 
         plt.plot(range(epochs), losses, label="Loss")
@@ -489,6 +493,7 @@ class YOLOActorPhoto():
         return (img_array, img_resized)
 
     def _find_out_default_anchors(self):
+        print("Finding out default anchors")
         entries = os.listdir(self.data_folder)
         boxes = []
 

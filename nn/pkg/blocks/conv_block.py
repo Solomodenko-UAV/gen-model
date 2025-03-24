@@ -1,6 +1,6 @@
 import os
 
-if os.environ.get("USE_GPU") != False:
+if os.environ.get("USE_GPU") != False and os.environ.get("USE_GPU") != 'True':
     import numpy as cp
 else:
     import cupy as cp

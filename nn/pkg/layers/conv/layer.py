@@ -1,6 +1,6 @@
 import os
 
-on_cpu = os.environ.get("USE_GPU") != False
+on_cpu = os.environ.get("USE_GPU") != False and os.environ.get("USE_GPU") != 'True'
 
 if on_cpu:
     import numpy as cp
@@ -336,14 +336,14 @@ class Convolution:
     def set_params(self, params: dict, key: str):
         self.filters = cp.array(params[f'{key}_filters'])
         self.biases = cp.array(params[f'{key}_biases'])
-        self.stride = params[f'{key}_stride']
-        self.padding = params[f'{key}_padding']
-        self.l2_lambda = params[f'{key}_l2_lambda']
-        self.clip_value = params[f'{key}_clip_value']
-        self.momentum = params[f'{key}_momentum']
+        self.stride = params[f'{key}_stride'].item()
+        self.padding = params[f'{key}_padding'].item()
+        self.l2_lambda = params[f'{key}_l2_lambda'].item()
+        self.clip_value = params[f'{key}_clip_value'].item()
+        self.momentum = params[f'{key}_momentum'].item()
         self.gamma = cp.array(params[f'{key}_gamma'])
         self.beta = cp.array(params[f'{key}_beta'])
-        self.eps = params[f'{key}_eps']
+        self.eps = params[f'{key}_eps'].item()
         self.running_mean = cp.array(params[f'{key}_running_mean'])
         self.running_variance = cp.array(params[f'{key}_running_variance'])
 

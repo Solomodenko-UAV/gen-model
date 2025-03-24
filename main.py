@@ -17,8 +17,8 @@ model.create_new_model(
 
 if platform.system() == "Windows":
     # data_folder = 'C:\\Projects\\uav\\gen-model\\data\\testdata\\images'
-    data_folder = 'C:\\Projects\\uav\\real_data\\VisDrone2019-DET-test-dev\\images_cut'
-    annotation_folder = "C:\\Projects\\uav\\real_data\\VisDrone2019-DET-test-dev\\annotations_cut"
+    data_folder = 'C:\\Projects\\uav\\real_data\\VisDrone2019-DET-test-dev\\images'
+    annotation_folder = "C:\\Projects\\uav\\real_data\\VisDrone2019-DET-test-dev\\annotations"
     # annotation_folder = "C:\\Projects\\uav\\gen-model\\data\\testdata\\annotations"
 elif platform.system() == "Darwin":
     data_folder = '/Users/kana/Projects/my_own/pet_projects/gen-model/data/VisDrone2019-DET-val/testdata/images'
@@ -31,25 +31,25 @@ actor = YOLOActorPhoto(
     annotation_folder=annotation_folder,
     model_input_img_res=(88, 88),
     model=model,
-    mini_batch_size=10
-    # mini_batch_size=1
+    # mini_batch_size=10
+    mini_batch_size=1
 )
 
 
 def train():
     start_time = time.time()
     # actor.run_training_loop(epochs=1, learning_rate=0.001)
-    actor.run_training_loop(epochs=40, learning_rate=0.001, start_image_idx=0)
+    actor.run_training_loop(epochs=-1, learning_rate=0.001, start_image_idx=0)
     elapsed_time = time.time() - start_time
     print(f"Training completed in {elapsed_time:.2f} seconds")
-    # model.save_model()
+    model.save_model()
     # model.load_model()
     actor.func_for_tests(
         print_shrunk_image=True,
         print_orig_image=True,
         # evaluate=True,
-        iou_threshold=0.5,
-        score_threshold=0.5,
+        iou_threshold=0.,
+        score_threshold=0.,
     )
 
 
@@ -59,8 +59,8 @@ def test():
         print_shrunk_image=True,
         print_orig_image=True,
         # evaluate=True,
-        iou_threshold=0.5,
-        score_threshold=0.5,
+        iou_threshold=0.,
+        score_threshold=0.,
     )
 
 

@@ -1,7 +1,7 @@
 import os
 import numpy as np
 
-on_cpu = os.environ.get("USE_GPU") != False
+on_cpu = os.environ.get("USE_GPU") != False and os.environ.get("USE_GPU") != 'True'
 
 if on_cpu:
     import numpy as cp
@@ -87,5 +87,5 @@ class FullyConnected:
     def set_params(self, params: dict, key: str):
         self.weights = cp.array(params[f'{key}_weights'])
         self.biases = cp.array(params[f'{key}_biases'])
-        self.l2_lambda = params[f'{key}_l2_lambda']
-        self.clip_value = params[f'{key}_clip_value']
+        self.l2_lambda = params[f'{key}_l2_lambda'].item()
+        self.clip_value = params[f'{key}_clip_value'].item()
