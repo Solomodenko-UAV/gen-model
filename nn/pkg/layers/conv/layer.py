@@ -1,4 +1,11 @@
-import cupy as cp
+import os
+
+on_cpu = os.environ.get("USE_GPU") != False
+
+if on_cpu:
+    import numpy as cp
+else:
+    import cupy as cp
 
 
 class Convolution:
@@ -313,30 +320,30 @@ class Convolution:
         return dZ_norm, dgamma, dbeta
 
     def get_params(self, params: dict, key: str):
-        params[f'{key}_filters'] = cp.asnumpy(self.filters)
-        params[f'{key}_biases'] = cp.asnumpy(self.biases)
-        params[f'{key}_stride'] = cp.asnumpy(self.stride)
-        params[f'{key}_padding'] = cp.asnumpy(self.padding)
-        params[f'{key}_l2_lambda'] = cp.asnumpy(self.l2_lambda)
-        params[f'{key}_clip_value'] = cp.asnumpy(self.clip_value)
-        params[f'{key}_momentum'] = cp.asnumpy(self.momentum)
-        params[f'{key}_gamma'] = cp.asnumpy(self.gamma)
-        params[f'{key}_beta'] = cp.asnumpy(self.beta)
-        params[f'{key}_eps'] = cp.asnumpy(self.eps)
-        params[f'{key}_running_mean'] = cp.asnumpy(self.running_mean)
-        params[f'{key}_running_variance'] = cp.asnumpy(self.running_variance)
+        params[f'{key}_filters'] = self.filters if on_cpu else cp.asnumpy(self.filters)
+        params[f'{key}_biases'] = self.biases if on_cpu else cp.asnumpy(self.biases)
+        params[f'{key}_stride'] = self.stride if on_cpu else cp.asnumpy(self.stride)
+        params[f'{key}_padding'] = self.padding if on_cpu else cp.asnumpy(self.padding)
+        params[f'{key}_l2_lambda'] = self.l2_lambda if on_cpu else cp.asnumpy(self.l2_lambda)
+        params[f'{key}_clip_value'] = self.clip_value if on_cpu else cp.asnumpy(self.clip_value)
+        params[f'{key}_momentum'] = self.momentum if on_cpu else cp.asnumpy(self.momentum)
+        params[f'{key}_gamma'] = self.gamma if on_cpu else cp.asnumpy(self.gamma)
+        params[f'{key}_beta'] = self.beta if on_cpu else cp.asnumpy(self.beta)
+        params[f'{key}_eps'] = self.eps if on_cpu else cp.asnumpy(self.eps)
+        params[f'{key}_running_mean'] = self.running_mean if on_cpu else cp.asnumpy(self.running_mean)
+        params[f'{key}_running_variance'] = self.running_variance if on_cpu else cp.asnumpy(self.running_variance)
 
     def set_params(self, params: dict, key: str):
         self.filters = cp.array(params[f'{key}_filters'])
         self.biases = cp.array(params[f'{key}_biases'])
-        self.stride = params[f'{key}_stride'].item()
-        self.padding = params[f'{key}_padding'].item()
-        self.l2_lambda = params[f'{key}_l2_lambda'].item()
-        self.clip_value = params[f'{key}_clip_value'].item()
-        self.momentum = params[f'{key}_momentum'].item()
+        self.stride = params[f'{key}_stride']
+        self.padding = params[f'{key}_padding']
+        self.l2_lambda = params[f'{key}_l2_lambda']
+        self.clip_value = params[f'{key}_clip_value']
+        self.momentum = params[f'{key}_momentum']
         self.gamma = cp.array(params[f'{key}_gamma'])
         self.beta = cp.array(params[f'{key}_beta'])
-        self.eps = params[f'{key}_eps'].item()
+        self.eps = params[f'{key}_eps']
         self.running_mean = cp.array(params[f'{key}_running_mean'])
         self.running_variance = cp.array(params[f'{key}_running_variance'])
 
@@ -387,7 +394,7 @@ def _im2col(X, filter_height, filter_width, padding, stride):
 
     # extract the patches
     patches = X_padded[:, rows, columns, filter_indices]  # shape: (m, filter_height*filter_width*num_channels, out_height*out_width)
-    
+
     # rearranging the extracted patches into Columns
     cols = patches.transpose(1, 2, 0).reshape(filter_height * filter_width * num_channels, -1)
 
@@ -410,38 +417,38 @@ def _col2im(cols, X_shape, filter_height, filter_width, padding, stride):
     """
     (m, height, width, num_filters) = X_shape
     height_padded, width_padded = height + 2 * padding, width + 2 * padding
-    
+
     out_height = (height_padded - filter_height) // stride + 1
     out_width = (width_padded - filter_width) // stride + 1
-    
+
     X_padded = cp.zeros((m, height_padded, width_padded, num_filters), dtype=cols.dtype)
-    
+
     # Compute indices for im2col (basically the same as in the _im2col)
     row_indices = cp.repeat(cp.arange(filter_height), filter_width)
     row_indices = cp.tile(row_indices, num_filters)
-    
+
     row_offsets = stride * cp.repeat(cp.arange(out_height), out_width)
-    
+
     column_indices = cp.tile(cp.arange(filter_width), filter_height * num_filters)
-    
+
     column_offsets = stride * cp.tile(cp.arange(out_width), out_height)
-    
-    rows = row_indices.reshape(-1, 1) + row_offsets.reshape(1, -1)        
+
+    rows = row_indices.reshape(-1, 1) + row_offsets.reshape(1, -1)
     columns = column_indices.reshape(-1, 1) + column_offsets.reshape(1, -1)
-            
+
     filter_indices = cp.repeat(cp.arange(num_filters), filter_height * filter_width).reshape(-1, 1)
-    
+
     # tile to match the shape of rows and columns
     filter_indices = cp.tile(filter_indices, (1, out_height * out_width))
-    
+
     cols_reshaped = cols.reshape(filter_height * filter_width * num_filters, out_height * out_width, m)
     cols_reshaped = cols_reshaped.transpose(2, 0, 1)
-    
+
     # Accumulate the columns back into the image
     for n in range(m):
         cp.add.at(X_padded[n], (rows, columns, filter_indices), cols_reshaped[n])
-        
+
     if padding == 0:
         return X_padded
-    
+
     return X_padded[:, padding:-padding, padding:-padding, :]

@@ -1,6 +1,14 @@
 
+import os
 
-import cupy as cp
+on_cpu = os.environ.get("USE_GPU") != False
+
+if on_cpu:
+    import numpy as cp
+else:
+    print(os.environ.get("USE_GPU"))
+    import cupy as cp
+    
 import numpy as np
 from nn.pkg.blocks.conv_block import ConvBlock
 from nn.pkg.layers.fc.layer import FullyConnected

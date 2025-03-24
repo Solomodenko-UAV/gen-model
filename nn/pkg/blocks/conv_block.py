@@ -1,5 +1,9 @@
-import cupy as cp
-import cupyx.profiler as profiler
+import os
+
+if os.environ.get("USE_GPU") != False:
+    import numpy as cp
+else:
+    import cupy as cp
 
 from nn.pkg.activations import activations
 from nn.pkg.layers.conv.layer import Convolution
@@ -61,20 +65,13 @@ class ConvBlock:
             Z (cp.ndarray): output of the convolution block - matrix of shape (m, output_height, output_width, num_output_channels), represents a batch of m images
         """
 
-        with profiler.time_range("conv_block_forward conv1"):
-            A_conv1 = self.conv1.convolve_forward_vectorized(X)
-
-        with profiler.time_range("conv_block_forward relu1"):
-            Z_conv1 = activations.relu(A_conv1)
-
-        with profiler.time_range("conv_block_forward conv2"):
-            A_conv2 = self.conv2.convolve_forward_vectorized(Z_conv1)
-
-        with profiler.time_range("conv_block_forward relu2"):
-            Z_conv2 = activations.relu(A_conv2)
-
-        with profiler.time_range("conv_block_forward maxpool"):
-            Z = self.maxpool.pool_forward_vectorized(Z_conv2)
+        A_conv1 = self.conv1.convolve_forward_vectorized(X)
+        Z_conv1 = activations.relu(A_conv1)
+        
+        A_conv2 = self.conv2.convolve_forward_vectorized(Z_conv1)
+        Z_conv2 = activations.relu(A_conv2)
+        
+        Z = self.maxpool.pool_forward_vectorized(Z_conv2)
 
         return Z
 

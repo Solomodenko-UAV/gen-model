@@ -1,6 +1,12 @@
-# import numpy as np
-import cupy as cp
 from nn.pkg.activations import activations
+import os
+
+on_cpu = os.environ.get("USE_GPU") != False
+
+if on_cpu:
+    import numpy as cp
+else:
+    import cupy as cp
 
 
 class YoloOutput:
@@ -139,21 +145,21 @@ class YoloOutput:
         return dX
 
     def get_params(self, params: dict, key: str):
-        params[f'{key}_weights'] = cp.asnumpy(self.weights)
-        params[f'{key}_biases'] = cp.asnumpy(self.biases)
-        params[f'{key}_l2_lambda'] = cp.asnumpy(self.l2_lambda)
-        params[f'{key}_clip_value'] = cp.asnumpy(self.clip_value)
-        params[f'{key}_S'] = cp.asnumpy(self.S)
-        params[f'{key}_B'] = cp.asnumpy(self.B)
-        params[f'{key}_C'] = cp.asnumpy(self.C)
-        params[f'{key}_out_per_cell'] = cp.asnumpy(self.out_per_cell)
+        params[f'{key}_weights'] = self.weights if on_cpu else cp.asnumpy(self.weights)
+        params[f'{key}_biases'] = self.biases if on_cpu else cp.asnumpy(self.biases)
+        params[f'{key}_l2_lambda'] = self.l2_lambda if on_cpu else cp.asnumpy(self.l2_lambda)
+        params[f'{key}_clip_value'] = self.clip_value if on_cpu else cp.asnumpy(self.clip_value)
+        params[f'{key}_S'] = self.S if on_cpu else cp.asnumpy(self.S)
+        params[f'{key}_B'] = self.B if on_cpu else cp.asnumpy(self.B)
+        params[f'{key}_C'] = self.C if on_cpu else cp.asnumpy(self.C)
+        params[f'{key}_out_per_cell'] = self.out_per_cell if on_cpu else cp.asnumpy(self.out_per_cell)
 
     def set_params(self, params: dict, key: str):
         self.weights = cp.array(params[f'{key}_weights'])
         self.biases = cp.array(params[f'{key}_biases'])
-        self.l2_lambda = params[f'{key}_l2_lambda'].item()
-        self.clip_value = params[f'{key}_clip_value'].item()
-        self.S = params[f'{key}_S'].item()
-        self.B = params[f'{key}_B'].item()
-        self.C = params[f'{key}_C'].item()
-        self.out_per_cell = params[f'{key}_out_per_cell'].item()
+        self.l2_lambda = params[f'{key}_l2_lambda']
+        self.clip_value = params[f'{key}_clip_value']
+        self.S = params[f'{key}_S']
+        self.B = params[f'{key}_B']
+        self.C = params[f'{key}_C']
+        self.out_per_cell = params[f'{key}_out_per_cell']

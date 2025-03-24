@@ -1,12 +1,17 @@
-import numpy as np
-import cupy as cp
-from PIL import Image
-import os
-import matplotlib.pyplot as plt
-import matplotlib.patches as patches
-
-from metadata import visDrone
 from nn.pkg.models.tinysimmoYOLO import TinysimmoYOLOModel
+from metadata import visDrone
+import matplotlib.patches as patches
+import matplotlib.pyplot as plt
+from PIL import Image
+import numpy as np
+import os
+
+on_cpu = os.environ.get("USE_GPU") != False
+
+if on_cpu:
+    import numpy as cp
+else:
+    import cupy as cp
 
 
 class YOLOActorPhoto():
@@ -60,7 +65,10 @@ class YOLOActorPhoto():
                 images = img_resized.reshape(1, *img_resized.shape)
 
                 if show_model_boxes:
-                    boxes_data = cp.asnumpy(self.predict(cp.array(images)))
+                    if on_cpu:
+                        boxes_data = self.predict(images)
+                    else:
+                        boxes_data = cp.asnumpy(self.predict(cp.array(images)))
                     _, ax = plt.subplots(1)
                     ax.imshow(img_resized)
                     for i in range(len(boxes_data)):
@@ -507,7 +515,10 @@ class YOLOActorPhoto():
             dict: average precision per class
         """
         boxes_pred = self.predict(cp.array(images))
-        boxes_pred = _non_max_suppression(cp.asnumpy(boxes_pred), iou_threshold=iou_threshold, score_threshold=score_threshold)
+        if on_cpu:
+            boxes_pred = _non_max_suppression(boxes_pred, iou_threshold=iou_threshold, score_threshold=score_threshold)
+        else:
+            boxes_pred = _non_max_suppression(cp.asnumpy(boxes_pred), iou_threshold=iou_threshold, score_threshold=score_threshold)
 
         per_class_results = _calc_precision_recall(annotations, boxes_pred, iou_threshold)
         mAP, ap_per_class = _calculate_mean_average_precision(per_class_results)
@@ -582,10 +593,10 @@ def _downscale_annotation(annotations: list, factor_H: int, factor_W: int):
 
     annotation_downscaled = [list(annotation) for annotation in annotations]
     for i in range(len(annotations)):
-        annotation_downscaled[i][visDrone.top_left_x_idx] =  annotation_downscaled[i][visDrone.top_left_x_idx] // factor_W + 1e-6
+        annotation_downscaled[i][visDrone.top_left_x_idx] = annotation_downscaled[i][visDrone.top_left_x_idx] // factor_W + 1e-6
         annotation_downscaled[i][visDrone.top_left_y_idx] = annotation_downscaled[i][visDrone.top_left_y_idx] // factor_H + 1e-6
-        annotation_downscaled[i][visDrone.width_idx]  = annotation_downscaled[i][visDrone.width_idx] // factor_W + 1e-6
-        annotation_downscaled[i][visDrone.height_idx]  = annotation_downscaled[i][visDrone.height_idx] // factor_H + 1e-6
+        annotation_downscaled[i][visDrone.width_idx] = annotation_downscaled[i][visDrone.width_idx] // factor_W + 1e-6
+        annotation_downscaled[i][visDrone.height_idx] = annotation_downscaled[i][visDrone.height_idx] // factor_H + 1e-6
 
     return annotation_downscaled
 

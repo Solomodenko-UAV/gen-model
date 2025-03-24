@@ -1,4 +1,13 @@
-import cupy as cp
+import os
+import numpy as np
+
+on_cpu = os.environ.get("USE_GPU") != False
+
+if on_cpu:
+    import numpy as cp
+else:
+    import cupy as cp
+
 
 class FullyConnected:
     def __init__(self,
@@ -20,7 +29,7 @@ class FullyConnected:
         self.clip_value = clip_value
         self.l2_lambda = l2_lambda
 
-    def feed_forward(self, X: cp.ndarray):
+    def feed_forward(self, X: np.ndarray):
         """
         forward pass of the fully connected layer
 
@@ -28,10 +37,14 @@ class FullyConnected:
             X (np.ndarray): input to the fully connected layer - matrix of shape (m, input_size), represents a batch of m images
 
         Returns:
-            A (np.ndarray): output of the fully connected layer - matrix of shape (m, output_size), represents a batch of m images
+            A (cp.ndarray): output of the fully connected layer - matrix of shape (m, output_size), represents a batch of m images
         """
 
-        X_gpu = cp.asarray(X)
+        if on_cpu:
+            X_gpu = X.copy()
+        else:
+            X_gpu = cp.asarray(X)
+
         self.cache = X_gpu
 
         return cp.dot(X_gpu, self.weights) + self.biases
@@ -41,11 +54,11 @@ class FullyConnected:
         backward pass of the fully connected
 
         Args:
-            dZ (np.ndarray): gradient of the cost with respect to the output of the fully connected layer - matrix of shape (m, output_size), represents a batch of m images
+            dZ (cp.ndarray): gradient of the cost with respect to the output of the fully connected layer - matrix of shape (m, output_size), represents a batch of m images
             learning_rate (float): learning rate to be used for updating the weights and biases
 
         Returns: 
-            dX(np.ndarray): gradient of the cost with respect to the input of the fully connected layer - matrix of shape (m, input_size), represents a batch of m images
+            dX(cp.ndarray): gradient of the cost with respect to the input of the fully connected layer - matrix of shape (m, input_size), represents a batch of m images
         """
         X = self.cache
         m = X.shape[0]
@@ -64,15 +77,15 @@ class FullyConnected:
         return dX
 
     def get_params(self, params: dict, key: str):
-        params[f'{key}_weights'] = cp.asnumpy(self.weights)
-        params[f'{key}_biases'] = cp.asnumpy(self.biases)
-        params[f'{key}_l2_lambda'] = cp.asnumpy(self.l2_lambda)
-        params[f'{key}_clip_value'] = cp.asnumpy(self.clip_value)
+        params[f'{key}_weights'] = self.weights if on_cpu else cp.asnumpy(self.weights)
+        params[f'{key}_biases'] = self.biases if on_cpu else cp.asnumpy(self.biases)
+        params[f'{key}_l2_lambda'] = self.l2_lambda if on_cpu else cp.asnumpy(self.l2_lambda)
+        params[f'{key}_clip_value'] = self.clip_value if on_cpu else cp.asnumpy(self.clip_value)
 
         return params
 
     def set_params(self, params: dict, key: str):
         self.weights = cp.array(params[f'{key}_weights'])
         self.biases = cp.array(params[f'{key}_biases'])
-        self.l2_lambda = params[f'{key}_l2_lambda'].item()
-        self.clip_value = params[f'{key}_clip_value'].item()
+        self.l2_lambda = params[f'{key}_l2_lambda']
+        self.clip_value = params[f'{key}_clip_value']

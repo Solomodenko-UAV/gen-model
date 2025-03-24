@@ -1,4 +1,11 @@
-import cupy as cp
+import os
+
+on_cpu = os.environ.get("USE_GPU") != False
+
+if on_cpu:
+    import numpy as cp
+else:
+    import cupy as cp
 
 
 class MaxPool:
@@ -172,8 +179,8 @@ class MaxPool:
         return dX
 
     def get_params(self, params: dict, key: str):
-        params[f'{key}_pool_size'] = cp.asnumpy(self.pool_size)
-        params[f'{key}_stride'] = cp.asnumpy(self.stride)
+        params[f'{key}_pool_size'] = self.pool_size if on_cpu else cp.asnumpy(self.pool_size)
+        params[f'{key}_stride'] = self.stride if on_cpu else cp.asnumpy(self.stride)
 
         return params
 
