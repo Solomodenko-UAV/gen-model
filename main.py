@@ -5,7 +5,8 @@ import platform
 
 
 # model = TinysimmoYOLOModel(model_path='model', S=4, B=2, C=1)
-model = TinysimmoYOLOModel(model_path='./model', S=4, B=2, C=11)  # TODO: rollback
+# model = TinysimmoYOLOModel(model_path='./model', S=4, B=2, C=11)  # TODO: rollback
+model = TinysimmoYOLOModel(model_path='./model', S=40, B=20, C=11)  # TODO: rollback
 
 model.create_new_model(
     image_size=(88, 88),
@@ -39,7 +40,12 @@ actor = YOLOActorPhoto(
 def train():
     start_time = time.time()
     # actor.run_training_loop(epochs=1, learning_rate=0.001)
-    actor.run_training_loop(epochs=-1, learning_rate=0.001, start_image_idx=0)
+    for i in range(10**3):
+        print(i)
+        loss = actor.run_training_loop(epochs=-1, learning_rate=1e-4, start_image_idx=0, print_loss=False)
+
+    print("final loss:", loss)
+    
     elapsed_time = time.time() - start_time
     print(f"Training completed in {elapsed_time:.2f} seconds")
     model.save_model()
@@ -64,5 +70,12 @@ def test():
     )
 
 
-# train()
-test()
+def check():
+    actor.func_for_tests(
+        check=True,
+    )
+
+
+train()
+# test()
+# check()

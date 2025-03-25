@@ -231,8 +231,8 @@ class Convolution:
             else:
                 dX[i, :, :, :] = dx_padded[self.padding:-self.padding, self.padding:-self.padding, :]
 
-        dW = cp.clip(dW, -self.clip_value, self.clip_value)
-        db = cp.clip(db, -self.clip_value, self.clip_value)
+        # dW = cp.clip(dW, -self.clip_value, self.clip_value)
+        # db = cp.clip(db, -self.clip_value, self.clip_value)
 
         self.filters -= learning_rate * (dW + self.l2_lambda * self.filters)  # L2 regularization
         self.biases -= db * learning_rate
@@ -272,8 +272,8 @@ class Convolution:
 
         db = cp.sum(dZ, axis=(0, 1, 2), keepdims=True)
 
-        dW = cp.clip(dW, -self.clip_value, self.clip_value)
-        db = cp.clip(db, -self.clip_value, self.clip_value)
+        # dW = cp.clip(dW, -self.clip_value, self.clip_value)
+        # db = cp.clip(db, -self.clip_value, self.clip_value)
 
         self.filters -= learning_rate * (dW + self.l2_lambda * self.filters)  # L2 regularization
         self.biases -= db * learning_rate

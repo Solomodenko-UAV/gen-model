@@ -30,7 +30,7 @@ class YOLOActorPhoto():
         self.mini_batch_size = mini_batch_size
         self.data_idx = 0
 
-    def func_for_tests(self, print_shrunk_image=False, print_orig_image=False, evaluate=False, iou_threshold: float = 0.5, score_threshold: float = 0.5):
+    def func_for_tests(self, print_shrunk_image=False, print_orig_image=False, evaluate=False, iou_threshold: float = 0.5, score_threshold: float = 0.5, check=False):
         entries = os.listdir(self.data_folder)
         img_files = {}
         annotation_files = {}
@@ -40,82 +40,122 @@ class YOLOActorPhoto():
             annotation_files[file_name] = os.path.join(self.annotation_folder, file_name + '.txt')
 
         # just show annotations and boxes on the image
-        # for file_name, img_path in img_files.items():
-        #     img, img_resized = self._prepare_single_image(img_path)
-        #     annotations = _extract_visDrone_annotations(annotation_files[file_name])
-        #     annotations_resized = _downscale_annotation(annotations, img.shape[0] // img_resized.shape[0], img.shape[1] // img_resized.shape[1])
-
-        #     fig, ax = plt.subplots(1)
-        #     ax.imshow(img_resized)
-        #     for i in range(len(annotations)):
-        #         x, y, w, h, _, c, _, _ = annotations_resized[i]
-        #         rect = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='r', facecolor='none')
-        #         ax.add_patch(rect)
-        #         label = visDrone.categories.get(c)
-        #         ax.text(x, y - 20, label, color='r', fontsize=10, bbox=dict(facecolor='white', alpha=0.5))
-
-        #     plt.axis('off')
-        #     plt.show()
-
-        # show model output
+        if check:
+            self.default_bounding_box_offsets = cp.array([[0.5, 0.5], [0.5, 0.5]])
+            
             for file_name, img_path in img_files.items():
                 img, img_resized = self._prepare_single_image(img_path)
-                images = img_resized.reshape(1, *img_resized.shape)
+                _, cooked_resized_annotations, orig_annotations = self.load_data_without_orig_image()
+                
+                cooked_orig_annotations = cp.array(self._cook_annotations(orig_annotations[0], img.shape, img.shape))
+                uncooked_orig_annotations = self._uncook_annotations(cooked_orig_annotations, img.shape, img.shape)
+                
+                uncooked_resized_annotations = self._uncook_annotations(cooked_resized_annotations[0], self.model_input_img_res, self.model_input_img_res)
 
-                if print_shrunk_image or print_orig_image:
-                    if on_cpu:
-                        boxes_data = self.predict(images, iou_threshold, score_threshold)
-                    else:
-                        boxes_data = cp.asnumpy(self.predict(cp.array(images), iou_threshold, score_threshold))
+                annotations = _extract_visDrone_annotations(annotation_files[file_name])
+                annotations_resized = _downscale_annotation(annotations, img.shape[0] // img_resized.shape[0], img.shape[1] // img_resized.shape[1])
 
-                    _, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
+                _, ((ax, ay), (az, ad)) = plt.subplots(2, 2, figsize=(12, 12))
 
-                    if print_shrunk_image:
-                        ax1.imshow(img_resized)
-                        ax1.set_title("Resized Image")
+                ax.imshow(img_resized)
+                ay.imshow(img)
+                az.imshow(img_resized)
+                ad.imshow(img)
 
-                        for i in range(len(boxes_data)):
-                            boxes_per_image = boxes_data[i]
-                            for box in boxes_per_image:
-                                x, y, w, h, obj_class, score = box
-                                rect = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='r', facecolor='none')
-                                ax1.add_patch(rect)
-                                # ax1.text(x, y - 20, f"{visDrone.categories.get(int(obj_class))} {score:.2f}", color='r', fontsize=10, bbox=dict(facecolor='white', alpha=0.5))
+                ax.set_title("orig downscaled annotations")
+                for i in range(len(annotations_resized)):
+                    x, y, w, h, _, c, _, _ = annotations_resized[i]
+                    rect = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='r', facecolor='none')
+                    ax.add_patch(rect)
+                    label = visDrone.categories.get(c)
+                    # ax.text(x, y - 20, label, color='r', fontsize=10, bbox=dict(facecolor='white', alpha=0.5))
+                
+                ay.set_title("orig annotations")
+                for i in range(len(annotations)):
+                    x, y, w, h, _, c, _, _ = annotations[i]
+                    rect = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='r', facecolor='none')
+                    ay.add_patch(rect)
+                    label = visDrone.categories.get(c)
+                    # ax.text(x, y - 20, label, color='r', fontsize=10, bbox=dict(facecolor='white', alpha=0.5))
+                    
+                az.set_title("uncooked downscaled annotations")
+                for i in range(len(uncooked_resized_annotations)):
+                    x, y, w, h, _, c, _, _ = uncooked_resized_annotations[i]
+                    rect = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='r', facecolor='none')
+                    az.add_patch(rect)
+                    label = visDrone.categories.get(c)
+                    # ax.text(x, y - 20, label, color='r', fontsize=10, bbox=dict(facecolor='white', alpha=0.5))
+                    
+                ad.set_title("uncooked orig annotations")
+                for i in range(len(uncooked_orig_annotations)):
+                    x, y, w, h, _, c, _, _ = uncooked_orig_annotations[i]
+                    rect = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='r', facecolor='none')
+                    ad.add_patch(rect)
+                    label = visDrone.categories.get(c)
+                    # ax.text(x, y - 20, label, color='r', fontsize=10, bbox=dict(facecolor='white', alpha=0.5))
 
-                    if print_orig_image:
-                        ax2.imshow(img)
-                        ax2.set_title("Original Image")
-                        boxes_data = _upscale_predicted_boxes(boxes_data, img.shape[0] // img_resized.shape[0], img.shape[1] // img_resized.shape[1])
+                plt.axis('off')
+                plt.show()
 
-                        for i in range(len(boxes_data)):
-                            boxes_per_image = boxes_data[i]
-                            for box in boxes_per_image:
-                                x, y, w, h, obj_class, score = box
-                                rect = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='b', facecolor='none')
-                                ax2.add_patch(rect)
-                                # ax2.text(x, y - 20, f"{visDrone.categories.get(int(obj_class))} {score:.2f}", color='b', fontsize=10, bbox=dict(facecolor='white', alpha=0.5))
+        # show model output
+        for file_name, img_path in img_files.items():
+            img, img_resized = self._prepare_single_image(img_path)
+            images = img_resized.reshape(1, *img_resized.shape)
 
-                    plt.tight_layout()
+            if print_shrunk_image or print_orig_image:
+                if on_cpu:
+                    boxes_data = self.predict(images, iou_threshold, score_threshold)
+                else:
+                    boxes_data = cp.asnumpy(self.predict(cp.array(images), iou_threshold, score_threshold))
 
-                    plt.axis('off')
-                    plt.show()
-                    return
+                _, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
 
-                if evaluate:
-                    annotations = _extract_visDrone_annotations(annotation_files[file_name])
-                    annotations_resized = _downscale_annotation(annotations, img.shape[0] // img_resized.shape[0], img.shape[1] // img_resized.shape[1])
+                if print_shrunk_image:
+                    ax1.imshow(img_resized)
+                    ax1.set_title("Resized Image")
 
-                    annotations = [annotations]
-                    annotations_resized = [annotations_resized]
-                    mAp, aps = self.evaluate_model(images, annotations_resized)
-                    print("resized annotations")
-                    print(f"mAP: {mAp}, APs: {aps}")
-                    print("--------------")
+                    for i in range(len(boxes_data)):
+                        boxes_per_image = boxes_data[i]
+                        for box in boxes_per_image:
+                            x, y, w, h, obj_class, score = box
+                            rect = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='r', facecolor='none')
+                            ax1.add_patch(rect)
+                            # ax1.text(x, y - 20, f"{visDrone.categories.get(int(obj_class))} {score:.2f}", color='r', fontsize=10, bbox=dict(facecolor='white', alpha=0.5))
 
-                    mAp, aps = self.evaluate_model(images, annotations)
-                    print("NOT resized annotations")
-                    print(f"mAP: {mAp}, APs: {aps}")
-                    print("--------------")
+                if print_orig_image:
+                    ax2.imshow(img)
+                    ax2.set_title("Original Image")
+                    boxes_data = _upscale_predicted_boxes(boxes_data, img.shape[0] // img_resized.shape[0], img.shape[1] // img_resized.shape[1])
+
+                    for i in range(len(boxes_data)):
+                        boxes_per_image = boxes_data[i]
+                        for box in boxes_per_image:
+                            x, y, w, h, obj_class, score = box
+                            rect = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='b', facecolor='none')
+                            ax2.add_patch(rect)
+                            # ax2.text(x, y - 20, f"{visDrone.categories.get(int(obj_class))} {score:.2f}", color='b', fontsize=10, bbox=dict(facecolor='white', alpha=0.5))
+
+                plt.tight_layout()
+
+                plt.axis('off')
+                plt.show()
+                return
+
+            if evaluate:
+                annotations = _extract_visDrone_annotations(annotation_files[file_name])
+                annotations_resized = _downscale_annotation(annotations, img.shape[0] // img_resized.shape[0], img.shape[1] // img_resized.shape[1])
+
+                annotations = [annotations]
+                annotations_resized = [annotations_resized]
+                mAp, aps = self.evaluate_model(images, annotations_resized)
+                print("resized annotations")
+                print(f"mAP: {mAp}, APs: {aps}")
+                print("--------------")
+
+                mAp, aps = self.evaluate_model(images, annotations)
+                print("NOT resized annotations")
+                print(f"mAP: {mAp}, APs: {aps}")
+                print("--------------")
 
     def load_data(self):
         """
@@ -158,10 +198,10 @@ class YOLOActorPhoto():
 
         Returns:
             tuple: tuple containing the images and the annotations.
-                    Images are of shape (m, height, width, num_channels) and
-                    annotations are of shape (m, n, 8)
+                    Images are of shape np.shape(m, height, width, num_channels) and
+                    annotations are of shape cp.shape(m, n, 8)
         """
-        entries = os.listdir(self.data_folder)[self.data_idx:self.data_idx + self.mini_batch_size]        
+        entries = os.listdir(self.data_folder)[self.data_idx:self.data_idx + self.mini_batch_size]
         img_files = {}
         annotation_files = {}
         for entry in entries:
@@ -193,16 +233,18 @@ class YOLOActorPhoto():
 
         return resized_images, resized_annotations_list, orig_annotations_list
 
-    def run_training_loop(self, start_image_idx=0, epochs=10, learning_rate=0.01):
+    def run_training_loop(self, start_image_idx=0, epochs=10, learning_rate=0.01, print_loss=False):
         if epochs == -1:
             epochs = int(np.ceil(len(os.listdir(self.data_folder)) / 10))
             
+        self.data_idx = 0
+
         if not hasattr(self, "default_bounding_box_offsets"):
             self._find_out_default_anchors()
 
         print("Starting training loop")
         print("number of epochs: ", epochs)
-        
+
         start_epoch = start_image_idx // self.mini_batch_size
         losses = []
         for i in range(epochs):
@@ -225,16 +267,19 @@ class YOLOActorPhoto():
 
             losses.append(loss)
 
-            if i % (epochs * 0.1) == 0: # each 10%
+            if i % (epochs * 0.1) == 0:  # each 10%
                 print(f"Epoch {i}, loss: {loss}")
 
-        plt.plot(range(epochs), losses, label="Loss")
-        plt.xlabel("Epochs")
-        plt.ylabel("Loss")
-        plt.title("Training Loss Over Epochs")
-        plt.legend()
-        plt.grid(True)
-        plt.show()
+        if print_loss:
+            plt.plot(range(epochs), losses, label="Loss")
+            plt.xlabel("Epochs")
+            plt.ylabel("Loss")
+            plt.title("Training Loss Over Epochs")
+            plt.legend()
+            plt.grid(True)
+            plt.show()
+            
+        return losses[-1] if losses else None
 
     def train_on_multiple_images(self,
                                  Y: np.ndarray,
@@ -323,6 +368,81 @@ class YOLOActorPhoto():
 
         return Y_target
 
+    def _uncook_annotations(self, Y_target: np.ndarray,
+                           original_img_shape: tuple,
+                           model_input_img_shape: tuple,
+                           object_thresh: float = -1) -> np.ndarray:
+        """
+        Convert a YOLO output (of shape (S, S, B*5+C)) back to a list of annotations.
+
+        Args:
+            Y_target (np.ndarray): model output of shape (S, S, B*5+C).
+            original_img_shape (tuple): (height, width) of the original image.
+            model_input_img_shape (tuple): (height, width) of the model input image.
+            S (int): grid size.
+            B (int): number of bounding box predictors per cell.
+            C (int): number of classes.
+            object_thresh (float): threshold for deciding if a cell contains an object.
+
+        Returns:
+            np.ndarray: array of annotations of shape (N, 8), where each annotation is:
+                        [top_left_x, top_left_y, width, height, object_flag, category, 0, 0]
+                        (The last two entries are placeholders, as your original annotations had 8 numbers.)
+        """
+        # Calculate cell dimensions (model input scale)
+        cell_height = model_input_img_shape[0] / self.model.S
+        cell_width = model_input_img_shape[1] / self.model.S
+
+        # Factors to convert from model input scale back to original image scale.
+        # In _cook_annotations, original coordinates were scaled by dividing:
+        #    X_norm = original_x / (original_img_width/model_input_img_width)
+        # so here we reverse that.
+        scale_x = original_img_shape[1] / model_input_img_shape[1]
+        scale_y = original_img_shape[0] / model_input_img_shape[0]
+
+        annotations_list = []
+
+        # Loop over every grid cell
+        for i in range(self.model.S):        # i is grid row (y-coordinate)
+            for j in range(self.model.S):    # j is grid column (x-coordinate)
+                cell_data = Y_target[i, j]  # shape (B*5 + C,)
+                # Get class vector (same for all boxes in this cell)
+                class_vector = cell_data[self.model.B*5:]
+                category = int(np.argmax(class_vector))
+
+                # For each bounding box predictor in this cell:
+                for b in range(self.model.B):
+                    start_idx = b * 5
+                    # object_existence_idx is 4 as in your visDrone definitions
+                    object_conf = cell_data[start_idx + 4]
+                    if object_conf > object_thresh:
+                        # Extract bounding box parameters (all in model input scale)
+                        x_offset = cell_data[start_idx]   # relative offset within cell [0,1]
+                        y_offset = cell_data[start_idx+1]   # relative offset within cell [0,1]
+                        box_width = cell_data[start_idx+2]  # already normalized to model input scale
+                        box_height = cell_data[start_idx+3]
+
+                        # Compute center of the box in model input coordinates:
+                        center_x = j * cell_width + x_offset * cell_width
+                        center_y = i * cell_height + y_offset * cell_height
+
+                        # Convert center and box dims to top-left corner (still in model input scale)
+                        top_left_x_model = center_x - box_width / 2.0
+                        top_left_y_model = center_y - box_height / 2.0
+
+                        # Convert coordinates from model input scale back to original image scale:
+                        top_left_x = top_left_x_model * scale_x
+                        top_left_y = top_left_y_model * scale_y
+                        orig_width = box_width * scale_x
+                        orig_height = box_height * scale_y
+
+                        # Build the annotation: here we assume annotation format is:
+                        # [top_left_x, top_left_y, width, height, object_flag, category, 0, 0]
+                        annotation = [top_left_x, top_left_y, orig_width, orig_height, 1, category, 0, 0]
+                        annotations_list.append(annotation)
+
+        return np.array(annotations_list)
+
     def _calc_loss_and_gradient(self, A: cp.ndarray, Y_target: cp.ndarray):
         """
         Calculate the loss and gradient
@@ -362,7 +482,7 @@ class YOLOActorPhoto():
                         if target_bbox[visDrone.object_existence_idx] == 0:
                             conf_diff = pred_bbox[visDrone.object_existence_idx]
                             loss += lambda_noobj * (conf_diff ** 2)
-                            grad_A[i, row, col, idx + visDrone.object_existence_idx] = 2 * lambda_noobj * conf_diff
+                            grad_A[i, row, col, idx + visDrone.object_existence_idx] += 2 * lambda_noobj * conf_diff
                             continue
 
                         # if model thinks there is an object in this box
@@ -371,7 +491,7 @@ class YOLOActorPhoto():
                         for j in range(visDrone.top_left_y_idx + 1):
                             diff = pred_bbox[j] - target_bbox[j]
                             loss += lambda_coord * (diff ** 2)
-                            grad_A[i, row, col, idx + j] = 2 * lambda_coord * diff
+                            grad_A[i, row, col, idx + j] += 2 * lambda_coord * diff
 
                         # for width and height, apply square root transformation to stabilize small boxes
                         for j in range(visDrone.width_idx, visDrone.height_idx + 1):
@@ -382,21 +502,25 @@ class YOLOActorPhoto():
                             diff = pred_sqrt - target_sqrt
                             loss += lambda_coord * (diff ** 2)
                             # derivative of sqrt (that we've just applied couple lines above) is 1/(2*sqrt(x))
-                            grad_A[i, row, col, idx+j] = 2 * lambda_coord * diff * (1/(2*cp.sqrt(cp.maximum(pred_bbox[j], 1e-6))))
+                            grad_A[i, row, col, idx+j] += 2 * lambda_coord * diff * (1/(2*cp.sqrt(cp.maximum(pred_bbox[j], 1e-6))))
 
                         # confidence loss
                         conf_diff = pred_bbox[visDrone.object_existence_idx] - target_bbox[visDrone.object_existence_idx]
                         loss += (conf_diff ** 2)
-                        grad_A[i, row, col, idx + visDrone.object_existence_idx] = 2 * conf_diff
+                        grad_A[i, row, col, idx + visDrone.object_existence_idx] += 2 * conf_diff
 
                         # classification loss
                         pred_class = prediction[B * 5:]  # [C] array
                         target_class = target[B * 5:]
                         class_diff = pred_class - target_class
                         loss += cp.sum(class_diff ** 2)
-                        grad_A[i, row, col, B * 5:] = 2 * class_diff
+                        grad_A[i, row, col, B * 5:] += 2 * class_diff
 
-        mean_loss = loss / (m * S * S * C)
+        # TODO: maybe I should remove it since I already have this in weights
+        max_grad_norm = 1.0
+        grad_A = cp.clip(grad_A, -max_grad_norm, max_grad_norm)
+        
+        mean_loss = loss / (m * S * S)
         return mean_loss.item(), grad_A
 
     def predict(self, images: cp.ndarray, iou_threshold: float = 0.5, score_threshold: float = 0.5):
@@ -547,7 +671,7 @@ def _upscale_predicted_boxes(boxes: np.ndarray, factor_H: int, factor_W: int):
     upscaled_boxes[:, :, 1] *= factor_H
     upscaled_boxes[:, :, 2] *= factor_W
     upscaled_boxes[:, :, 3] *= factor_H
-    
+
     return upscaled_boxes
 
 

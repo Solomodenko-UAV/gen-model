@@ -39,7 +39,7 @@ class YoloOutput:
 
         std = cp.sqrt(2.0 / (input_size + out_dim)).astype(cp.float32)  # Xavier for softmax
         self.weights = cp.random.randn(input_size, out_dim).astype(cp.float32) * std
-        self.biases = cp.zeros((1, out_dim), dtype=cp.float32)
+        self.biases = cp.full((1, out_dim), -5, dtype=cp.float32)
         self.cache = {}
 
         self.l2_lambda = l2_lambda
@@ -136,8 +136,8 @@ class YoloOutput:
 
         dX = cp.dot(dX_pre, self.weights.T)  # shape (m, input_size)
 
-        dW = cp.clip(dW, -self.clip_value, self.clip_value)
-        db = cp.clip(db, -self.clip_value, self.clip_value)
+        # dW = cp.clip(dW, -self.clip_value, self.clip_value)
+        # db = cp.clip(db, -self.clip_value, self.clip_value)
 
         self.weights -= learning_rate * (dW + self.l2_lambda * self.weights)  # L2 regularization
         self.biases -= db * learning_rate
