@@ -44,6 +44,16 @@ class YoloOutput:
 
         self.l2_lambda = l2_lambda
         self.clip_value = clip_value
+        
+        for b in range(B):
+            width_idx = b * 5 + 2
+            height_idx = b * 5 + 3
+            # Since the bias is shared across all grid cells, adjust the indices appropriately:
+            # You can reshape biases to (S, S, C + B*5), set the width and height entries to 0, then reshape back.
+            self.biases = self.biases.reshape(S, S, C + B*5)
+            self.biases[:, :, width_idx] = 0.0
+            self.biases[:, :, height_idx] = 0.0
+            self.biases = self.biases.reshape(1, out_dim)
 
     def feed_forward(self, X: cp.ndarray, anchors: cp.ndarray = None):
         """
