@@ -1,3 +1,4 @@
+import helper.helper as helper
 from nn.pkg.models.tinysimmoYOLO import TinysimmoYOLOModel
 from metadata import visDrone
 import matplotlib.patches as patches
@@ -258,9 +259,9 @@ class YOLOActorPhoto():
                 break
 
             # normalize image
-            mean = [0.485, 0.456, 0.406]  # ImageNet mean
-            std = [0.229, 0.224, 0.225]   # ImageNet std
-            resized_images = (cp.asarray(resized_images) / 255.0 - mean) / std
+            mean = cp.array([0.485, 0.456, 0.406])  # ImageNet mean
+            std = cp.array([0.229, 0.224, 0.225])   # ImageNet std
+            resized_images = (cp.array(resized_images) / 255.0 - mean) / std
 
             Y = self.model.forward(resized_images, self.default_bounding_box_offsets)
 
@@ -285,6 +286,48 @@ class YOLOActorPhoto():
             plt.show()
 
         return losses[-1] if losses else None
+
+    def debug(self):
+        losses = []
+        for i in range(10**2):
+            print(i)
+            loss = self.run_training_loop(epochs=-1, learning_rate=1e-4, start_image_idx=0, print_loss=False)
+            losses.append(loss)
+
+        norm_weights, activations = self.model.gather_debug_data()
+        import matplotlib.pyplot as plt
+
+        # Assuming `losses` is a list of arrays or a single array
+        # plt.figure(figsize=(10, 6))
+        # fig, axs = plt.subplots(1, len(norm_weights), figsize=(15, 5))
+
+        # norm_weights
+        # for idx, norm_weight in enumerate(norm_weights):
+        #     norm_values, label = norm_weight
+        #     plt.figure(idx + 1)
+        #     plt.plot(norm_values, label=f"{label} weights norms")
+        #     plt.title(f"Whiteboard {idx + 1}")
+        #     plt.legend()
+        #     plt.grid(True)
+
+        # activations
+
+        # print(activations)
+
+        self.func_for_tests(
+            print_shrunk_image=True,
+            print_orig_image=True,
+            # evaluate=True,
+            iou_threshold=0.,
+            score_threshold=0.,
+        )
+
+        # plt.xlabel("Epochs")
+        # plt.ylabel("Loss")
+        # plt.title("Loss Curves for All Runs")
+        # plt.legend()
+        # plt.grid(True)
+        plt.show()
 
     def train_on_multiple_images(self,
                                  Y: np.ndarray,
@@ -497,7 +540,9 @@ class YOLOActorPhoto():
                             loss += lambda_coord * (diff ** 2)
                             grad_A[i, row, col, idx + j] += 2 * lambda_coord * diff
 
-                        anchor_w, anchor_h = self.default_bounding_box_offsets[b]
+                        ious = helper.compute_iou_for_anchors(pred_bbox[visDrone.width_idx:visDrone.height_idx + 1], self.default_bounding_box_offsets)
+                        best_anchor_idx = cp.argmax(ious)
+                        anchor_w, anchor_h = self.default_bounding_box_offsets[best_anchor_idx]
 
                         # calc target adjustments (ground truth relative to anchor):
                         target_tw = cp.log(target_bbox[visDrone.width_idx] / (anchor_w + 1e-6))
@@ -514,17 +559,6 @@ class YOLOActorPhoto():
                         grad_A[i, row, col, idx + visDrone.width_idx] += 2 * lambda_coord * diff_w
                         grad_A[i, row, col, idx + visDrone.height_idx] += 2 * lambda_coord * diff_h
 
-                        # for width and height, apply square root transformation to stabilize small boxes
-                        # for j in range(visDrone.width_idx, visDrone.height_idx + 1):
-                        #     # avoid division by zero
-                        #     pred_sqrt = cp.sqrt(cp.maximum(pred_bbox[j], 1e-6))
-                        #     target_sqrt = cp.sqrt(target_bbox[j])
-
-                        #     diff = pred_sqrt - target_sqrt
-                        #     loss += lambda_coord * (diff ** 2)
-                        #     # derivative of sqrt (that we've just applied couple lines above) is 1/(2*sqrt(x))
-                        #     grad_A[i, row, col, idx+j] += 2 * lambda_coord * diff * (1/(2*cp.sqrt(cp.maximum(pred_bbox[j], 1e-6))))
-
                         # confidence loss
                         target_conf = target_bbox[visDrone.object_existence_idx]
                         pred_conf = pred_bbox[visDrone.object_existence_idx]
@@ -540,7 +574,7 @@ class YOLOActorPhoto():
 
         # TODO: maybe I should remove it since I already have this in weights
         max_grad_norm = 1.0
-        grad_A = cp.clip(grad_A, min=-max_grad_norm, max=max_grad_norm)
+        grad_A = cp.clip(grad_A, -max_grad_norm, max_grad_norm)
 
         mean_loss = loss / (m * S * S)
         return mean_loss.item(), grad_A
@@ -663,7 +697,7 @@ class YOLOActorPhoto():
         """
         self._find_out_default_anchors()
         _, resized_annotations, _ = self.load_data_without_orig_image()
-        
+
         input_array = cp.random.randn(1, 88, 88, 3)
 
         Y = self.model.forward(input_array, self.default_bounding_box_offsets)
@@ -671,26 +705,26 @@ class YOLOActorPhoto():
         dW = self.model.backward(grad, 0.)
 
         epsilon = 1e-5
-        for i in range (3):
-            for j in range (3):
-                weight = self.model.conv_blocks[0].conv1.filters[i,j, 0, 0]
+        for i in range(3):
+            for j in range(3):
+                weight = self.model.conv_blocks[0].conv1.filters[i, j, 0, 0]
                 orig_weight = weight.copy()
 
-                self.model.conv_blocks[0].conv1.filters[i,j, 0, 0] = orig_weight + epsilon
+                self.model.conv_blocks[0].conv1.filters[i, j, 0, 0] = orig_weight + epsilon
                 Y_plus = self.model.forward(input_array, self.default_bounding_box_offsets)
                 loss_plus, _ = self._calc_loss_and_gradient(Y_plus, cp.asarray(resized_annotations))
 
-                self.model.conv_blocks[0].conv1.filters[i,j, 0, 0] = orig_weight - epsilon
+                self.model.conv_blocks[0].conv1.filters[i, j, 0, 0] = orig_weight - epsilon
                 Y_minus = self.model.forward(input_array, self.default_bounding_box_offsets)
                 loss_minus, _ = self._calc_loss_and_gradient(Y_minus, cp.asarray(resized_annotations))
 
                 numerical_grad = (loss_plus - loss_minus) / (2 * epsilon)
-                
+
                 analytical_grad = dW[i, j, 0, 0]
                 difference = abs(analytical_grad - numerical_grad) / max(1, abs(analytical_grad), abs(numerical_grad))
                 print(f"i: {i}, j:{j}, Relative difference:", difference)
-                
-                self.model.conv_blocks[0].conv1.filters[i,j, 0, 0] = orig_weight
+
+                self.model.conv_blocks[0].conv1.filters[i, j, 0, 0] = orig_weight
 
 
 def _downscale_img(image: np.ndarray, new_shape: tuple):

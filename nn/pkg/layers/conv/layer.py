@@ -7,7 +7,6 @@ if on_cpu:
 else:
     import cupy as cp
 
-
 class Convolution:
 
     def __init__(self,
@@ -48,7 +47,7 @@ class Convolution:
 
         std = cp.sqrt(2 / (input_channels * filter_size**2)).astype(cp.float32)  # Xavier for ReLU
         self.filters = cp.random.randn(filter_size, filter_size, input_channels, num_filters).astype(cp.float32) * std
-        self.biases = cp.zeros((1, 1, 1, num_filters)).astype(cp.float32)
+        self.biases = cp.full((1, 1, 1, num_filters), 0.).astype(cp.float32)
 
         self.stride = stride
         self.padding = padding
@@ -62,6 +61,8 @@ class Convolution:
 
         self.running_mean = cp.zeros((1, 1, 1, self.filters.shape[3]))  # initial activations are assumed to be centered around zero
         self.running_variance = cp.ones((1, 1, 1, self.filters.shape[3]))  # variance shouldn't start at 0 (to avoid division by zero).
+        
+        self.weight_norms = []
 
     def zero_pad(self, X: cp.ndarray):
         """
@@ -277,6 +278,8 @@ class Convolution:
 
         self.gamma -= learning_rate * dgamma
         self.beta -= learning_rate * dbeta
+        
+        self.weight_norms.append(cp.linalg.norm(self.filters))
 
         return dX, dW
 

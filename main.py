@@ -7,13 +7,15 @@ import platform
 
 
 # model = TinysimmoYOLOModel(model_path='model', S=4, B=2, C=1)
-# model = TinysimmoYOLOModel(model_path='./model', S=4, B=2, C=11)  # TODO: rollback
-model = TinysimmoYOLOModel(model_path='./model', S=40, B=20, C=11)  # TODO: rollback
+model = TinysimmoYOLOModel(model_path='./model', S=4, B=2, C=11)  # TODO: rollback
+# model = TinysimmoYOLOModel(model_path='./model', S=40, B=20, C=11)  # TODO: rollback
 
 model.create_new_model(
     image_size=(88, 88),
-    conv_l2_lambda=0.0001,
-    fc_l2_lambda=0.0001,
+    # conv_l2_lambda=0.0001,
+    conv_l2_lambda=0.,
+    fc_l2_lambda=0.,
+    # fc_l2_lambda=0.0001,
     clip_value=5.0,
     conv_momentum=0.8,
 )
@@ -80,9 +82,14 @@ def check():
 
 def test_gradient():
     actor._test_gradient()
+    
+    
+def debug():
+    actor.debug()
 
 
 # train()
 # test()
 # check()
-test_gradient()
+# test_gradient()
+debug()

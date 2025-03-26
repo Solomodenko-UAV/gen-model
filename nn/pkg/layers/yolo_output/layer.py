@@ -1,3 +1,4 @@
+from helper import helper
 from nn.pkg.activations import activations
 import os
 
@@ -7,7 +8,6 @@ if on_cpu:
     import numpy as cp
 else:
     import cupy as cp
-
 
 class YoloOutput:
     """
@@ -44,7 +44,7 @@ class YoloOutput:
 
         self.l2_lambda = l2_lambda
         self.clip_value = clip_value
-        
+
         for b in range(B):
             width_idx = b * 5 + 2
             height_idx = b * 5 + 3
@@ -54,6 +54,8 @@ class YoloOutput:
             self.biases[:, :, width_idx] = 0.0
             self.biases[:, :, height_idx] = 0.0
             self.biases = self.biases.reshape(1, out_dim)
+            
+        self.weight_norms = []
 
     def feed_forward(self, X: cp.ndarray, anchors: cp.ndarray = None):
         """
@@ -165,6 +167,8 @@ class YoloOutput:
 
         self.weights -= learning_rate * (dW + self.l2_lambda * self.weights)  # L2 regularization
         self.biases -= db * learning_rate
+        
+        self.weight_norms.append(cp.linalg.norm(self.weights))
 
         return dX, dW, db
 

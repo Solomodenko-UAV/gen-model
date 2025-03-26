@@ -41,8 +41,8 @@ def vectorized_softmax_derivative(s: np.ndarray, grad_soft: np.ndarray):
 
 
 # leaky relu
-def relu(x):
-    return np.maximum(0.01 * x, x)
+def relu(x, alpha=0.01):
+    return np.maximum(alpha * x, x)
 
 def relu_derivative(x, alpha=0.01):
     return np.where(x > 0, 1, alpha)

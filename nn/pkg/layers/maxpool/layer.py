@@ -7,7 +7,6 @@ if on_cpu:
 else:
     import cupy as cp
 
-
 class MaxPool:
     def __init__(self, pool_size: int, stride: int):
         """

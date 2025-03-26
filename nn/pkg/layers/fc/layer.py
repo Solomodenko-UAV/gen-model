@@ -25,9 +25,11 @@ class FullyConnected:
         """
         std = cp.sqrt(2 / input_size).astype(cp.float32)  # He init for ReLU
         self.weights = cp.random.randn(input_size, output_size).astype(cp.float32) * std
-        self.biases = cp.zeros((1, output_size), dtype=cp.float32)
+        self.biases = cp.full((1, output_size), 0., dtype=cp.float32)
         self.clip_value = clip_value
         self.l2_lambda = l2_lambda
+        
+        self.weight_norms = []
 
     def feed_forward(self, X: np.ndarray):
         """
@@ -70,6 +72,8 @@ class FullyConnected:
 
         self.weights -= learning_rate * (dW + self.l2_lambda * self.weights)  # L2 regularization
         self.biases -= db * learning_rate
+        
+        self.weight_norms.append(cp.linalg.norm(self.weights))
 
         return dX, dW, db
 

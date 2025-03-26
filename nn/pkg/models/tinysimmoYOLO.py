@@ -66,7 +66,6 @@ class TinysimmoYOLOModel:
         for block in self.conv_blocks:
             images = block.forward(images)
 
-        # print(images)
         self.conv_output_shape = images.shape
         images = images.reshape(images.shape[0], -1)
         images = self.fc_layer.feed_forward(images)
@@ -114,3 +113,21 @@ class TinysimmoYOLOModel:
 
         self.fc_layer.set_params(params, 'fc_layer')
         self.output_layer.set_params(params, 'output_layer')
+        
+    def gather_debug_data(self):
+        """
+        Gathers the norms of the weights
+        """
+        weight_norms = []
+        for i, block in enumerate(self.conv_blocks):
+            weight_norms.append((block.conv1.weight_norms, f'conv_block_{i}_conv1'))
+            weight_norms.append((block.conv2.weight_norms, f'conv_block_{i}_conv2'))
+
+        weight_norms.append((self.fc_layer.weight_norms, 'fc_layer'))
+        weight_norms.append((self.output_layer.weight_norms, 'output_layer'))
+
+        activations = []
+        for i, block in enumerate(self.conv_blocks):
+            activations.append((block.activation_values, f'conv_block_{i}'))
+            
+        return weight_norms, activations
