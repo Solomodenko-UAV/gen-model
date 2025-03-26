@@ -89,11 +89,11 @@ class ConvBlock:
 
         dZ_maxpool = self.maxpool.pool_backward_vectorized(dZ)
         dZ_conv2 = activations.relu_derivative(dZ_maxpool)
-        dA_conv2 = self.conv2.convolve_backward_vectorized(dZ_conv2, learning_rate)
+        dA_conv2, _ = self.conv2.convolve_backward_vectorized(dZ_conv2, learning_rate)
         dZ_conv1 = activations.relu_derivative(dA_conv2)
-        dA = self.conv1.convolve_backward_vectorized(dZ_conv1, learning_rate)
+        dA, dW = self.conv1.convolve_backward_vectorized(dZ_conv1, learning_rate)
 
-        return dA
+        return dA, dW
 
     def calc_output_dims(self, image_wh: tuple):
         conv1_wh = helper.calc_conv_layer_out_dim(image_wh, padding=1, kernel_size=conv_filter_size, stride=1)

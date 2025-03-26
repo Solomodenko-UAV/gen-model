@@ -68,13 +68,10 @@ class FullyConnected:
 
         dX = cp.dot(dZ, self.weights.T)
 
-        # dW = cp.clip(dW, -self.clip_value, self.clip_value)
-        # db = cp.clip(db, -self.clip_value, self.clip_value)
-
         self.weights -= learning_rate * (dW + self.l2_lambda * self.weights)  # L2 regularization
         self.biases -= db * learning_rate
 
-        return dX
+        return dX, dW, db
 
     def get_params(self, params: dict, key: str):
         params[f'{key}_weights'] = self.weights if on_cpu else cp.asnumpy(self.weights)

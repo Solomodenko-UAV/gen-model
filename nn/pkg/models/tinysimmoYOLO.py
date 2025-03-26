@@ -1,4 +1,8 @@
 
+from nn.pkg.layers.yolo_output.layer import YoloOutput
+from nn.pkg.layers.fc.layer import FullyConnected
+from nn.pkg.blocks.conv_block import ConvBlock
+import numpy as np
 import os
 
 on_cpu = os.environ.get("USE_GPU") != False and os.environ.get("USE_GPU") != 'True'
@@ -7,11 +11,6 @@ if on_cpu:
     import numpy as cp
 else:
     import cupy as cp
-    
-import numpy as np
-from nn.pkg.blocks.conv_block import ConvBlock
-from nn.pkg.layers.fc.layer import FullyConnected
-from nn.pkg.layers.yolo_output.layer import YoloOutput
 
 
 class TinysimmoYOLOModel:
@@ -54,7 +53,7 @@ class TinysimmoYOLOModel:
         self.fc_layer = FullyConnected(input_size=image_size[0]*image_size[1]*128, output_size=256, l2_lambda=fc_l2_lambda, clip_value=clip_value)  # 256 is a bit more than 4*4(2*5+1)
         self.output_layer = YoloOutput(input_size=256, S=self.S, B=self.B, C=self.C, l2_lambda=fc_l2_lambda, clip_value=clip_value)
 
-    def forward(self, images: cp.ndarray):
+    def forward(self, images: cp.ndarray, anchors: cp.ndarray = None):
         """
         Forward pass of the model
 
@@ -71,7 +70,7 @@ class TinysimmoYOLOModel:
         self.conv_output_shape = images.shape
         images = images.reshape(images.shape[0], -1)
         images = self.fc_layer.feed_forward(images)
-        images = self.output_layer.feed_forward(images)
+        images = self.output_layer.feed_forward(images, anchors)
 
         return images
 
@@ -83,13 +82,15 @@ class TinysimmoYOLOModel:
             grad_A (np.ndarray): gradient of the loss with respect to the output of the model
             learning_rate (float): learning rate to be used for updating the weights and biases
         """
-        dZ = self.output_layer.feed_backward(grad_A, learning_rate)
-        dZ = self.fc_layer.feed_backward(dZ, learning_rate)
+        dZ, _, _ = self.output_layer.feed_backward(grad_A, learning_rate)
+        dZ, _, _ = self.fc_layer.feed_backward(dZ, learning_rate)
 
         dZ = dZ.reshape(self.conv_output_shape)
 
         for block in reversed(self.conv_blocks):
-            dZ = block.backward(dZ, learning_rate)
+            dZ, dW = block.backward(dZ, learning_rate)
+        
+        return dW
 
     def save_model(self):
         """

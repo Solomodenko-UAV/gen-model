@@ -39,13 +39,13 @@ class YoloOutput:
 
         std = cp.sqrt(2.0 / (input_size + out_dim)).astype(cp.float32)  # Xavier for softmax
         self.weights = cp.random.randn(input_size, out_dim).astype(cp.float32) * std
-        self.biases = cp.full((1, out_dim), -5, dtype=cp.float32)
+        self.biases = cp.full((1, out_dim), -5.0, dtype=cp.float32)  # sigmoid(-5) ≈ 0.0067
         self.cache = {}
 
         self.l2_lambda = l2_lambda
         self.clip_value = clip_value
 
-    def feed_forward(self, X: cp.ndarray):
+    def feed_forward(self, X: cp.ndarray, anchors: cp.ndarray = None):
         """
         forward pass of the yolo output layer
 
@@ -67,6 +67,8 @@ class YoloOutput:
         for b in range(self.B):
             x_coordinate_idx = b * 5  # relative center x coordinate value index
             y_coordinate_idx = b * 5 + 1  # relative center y coordinate value index
+            width_idx = b * 5 + 2  # relative width value index
+            height_idx = b * 5 + 3  # relative height value index
             confidence_idx = b * 5 + 4  # confidence value index
 
             x_sigmoid = activations.sigmoid(A[:, :, :, x_coordinate_idx])
@@ -83,7 +85,16 @@ class YoloOutput:
             A[:, :, :, y_coordinate_idx] = (y_sigmoid + grid_y) / self.S
 
             A[:, :, :, confidence_idx] = activations.sigmoid(A[:, :, :, confidence_idx])
-            # leave weight and height (indices b*5+2 and b*5+3) as is
+
+            if anchors is not None:
+                anchor_w, anchor_h = anchors[b]
+                w = anchor_w * cp.exp(A[:, :, :, width_idx])  # relative width
+                h = anchor_h * cp.exp(A[:, :, :, height_idx])  # relative height
+                A[:, :, :, width_idx] = w
+                A[:, :, :, height_idx] = h
+
+                self.cache[f'w_{b}'] = w
+                self.cache[f'h_{b}'] = h
 
         A[:, :, :, self.B * 5:] = activations.softmax(A[:, :, :, self.B * 5:])  # apply softmax to class scores
         self.cache['Z'] = A  # after activation
@@ -113,6 +124,8 @@ class YoloOutput:
         for b in range(self.B):
             x_coordinate_idx = b * 5
             y_coordinate_idx = b * 5 + 1
+            width_idx = b * 5 + 2
+            height_idx = b * 5 + 3
             confidence_idx = b * 5 + 4
 
             sigmoid_x = self.cache[f'x_sigmoid_{b}']
@@ -123,7 +136,11 @@ class YoloOutput:
 
             confidence_value = Z[:, :, :, confidence_idx]
             dX_pre[:, :, :, confidence_idx] *= activations.sigmoid_derivative(confidence_value) + 1e-6
-            # leave weight and height (indices b*5+2 and b*5+3) as is
+
+            w = self.cache[f'w_{b}']
+            h = self.cache[f'h_{b}']
+            dX_pre[:, :, :, width_idx] *= w
+            dX_pre[:, :, :, height_idx] *= h
 
         softmax_output = Z[:, :, :, self.B * 5:]
         grad_soft = dX_pre[:, :, :, self.B * 5:]
@@ -136,13 +153,10 @@ class YoloOutput:
 
         dX = cp.dot(dX_pre, self.weights.T)  # shape (m, input_size)
 
-        # dW = cp.clip(dW, -self.clip_value, self.clip_value)
-        # db = cp.clip(db, -self.clip_value, self.clip_value)
-
         self.weights -= learning_rate * (dW + self.l2_lambda * self.weights)  # L2 regularization
         self.biases -= db * learning_rate
 
-        return dX
+        return dX, dW, db
 
     def get_params(self, params: dict, key: str):
         params[f'{key}_weights'] = self.weights if on_cpu else cp.asnumpy(self.weights)

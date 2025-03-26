@@ -281,7 +281,7 @@ class Convolution:
         self.gamma -= learning_rate * dgamma
         self.beta -= learning_rate * dbeta
 
-        return dX
+        return dX, dW
 
     def _normalize_forward(self, Z: cp.ndarray):
         """
