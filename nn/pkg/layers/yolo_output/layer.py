@@ -1,6 +1,7 @@
 from helper import helper
 from nn.pkg.activations import activations
 import os
+import helper.helper as helper
 
 on_cpu = os.environ.get("USE_GPU") != False and os.environ.get("USE_GPU") != 'True'
 
@@ -8,6 +9,7 @@ if on_cpu:
     import numpy as cp
 else:
     import cupy as cp
+
 
 class YoloOutput:
     """
@@ -38,7 +40,7 @@ class YoloOutput:
         self.out_per_cell = C + B * 5
 
         std = cp.sqrt(2.0 / (input_size + out_dim)).astype(cp.float32)  # Xavier for softmax
-        self.weights = cp.random.randn(input_size, out_dim).astype(cp.float32) * std
+        self.weights = helper.create_orthogonal_matrix((input_size, out_dim), std)
         self.biases = cp.full((1, out_dim), -5.0, dtype=cp.float32)  # sigmoid(-5) ≈ 0.0067
         self.cache = {}
 
@@ -54,7 +56,7 @@ class YoloOutput:
             self.biases[:, :, width_idx] = 0.0
             self.biases[:, :, height_idx] = 0.0
             self.biases = self.biases.reshape(1, out_dim)
-            
+
         self.weight_norms = []
 
     def feed_forward(self, X: cp.ndarray, anchors: cp.ndarray = None):
@@ -167,7 +169,7 @@ class YoloOutput:
 
         self.weights -= learning_rate * (dW + self.l2_lambda * self.weights)  # L2 regularization
         self.biases -= db * learning_rate
-        
+
         self.weight_norms.append(cp.linalg.norm(self.weights))
 
         return dX, dW, db

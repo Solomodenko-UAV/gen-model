@@ -7,8 +7,8 @@ import platform
 
 
 # model = TinysimmoYOLOModel(model_path='model', S=4, B=2, C=1)
-model = TinysimmoYOLOModel(model_path='./model', S=4, B=2, C=11)  # TODO: rollback
-# model = TinysimmoYOLOModel(model_path='./model', S=40, B=20, C=11)  # TODO: rollback
+# model = TinysimmoYOLOModel(model_path='./model', S=4, B=2, C=11)  # TODO: rollback
+model = TinysimmoYOLOModel(model_path='./model', S=40, B=5, C=11)  # TODO: rollback
 
 model.create_new_model(
     image_size=(88, 88),
@@ -44,9 +44,12 @@ actor = YOLOActorPhoto(
 def train():
     start_time = time.time()
     # actor.run_training_loop(epochs=1, learning_rate=0.001)
-    for i in range(10**2):
+    learning_rate = 1e-4
+    for i in range(10**2 * 1):
         print(i)
-        loss = actor.run_training_loop(epochs=-1, learning_rate=1e-4, start_image_idx=0, print_loss=False)
+        # if i % 80 == 0:
+        #     learning_rate *= 1.3
+        loss = actor.run_training_loop(epochs=-1, learning_rate=learning_rate, start_image_idx=0, print_loss=False)
 
     print("final loss:", loss)
 
@@ -82,14 +85,9 @@ def check():
 
 def test_gradient():
     actor._test_gradient()
-    
-    
-def debug():
-    actor.debug()
 
 
-# train()
+train()
 # test()
 # check()
 # test_gradient()
-debug()

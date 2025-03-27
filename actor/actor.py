@@ -507,7 +507,7 @@ class YOLOActorPhoto():
         grad_A = np.zeros_like(A)
 
         # Constant for loss weighting
-        lambda_coord = 5.0
+        lambda_coord = 10.0
 
         m, S, _, _ = A.shape
         B = self.model.B

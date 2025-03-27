@@ -1,3 +1,4 @@
+import helper.helper as helper
 import os
 
 on_cpu = os.environ.get("USE_GPU") != False and os.environ.get("USE_GPU") != 'True'
@@ -46,7 +47,7 @@ class Convolution:
             raise ValueError("number of filters should be greater than 0")
 
         std = cp.sqrt(2 / (input_channels * filter_size**2)).astype(cp.float32)  # Xavier for ReLU
-        self.filters = cp.random.randn(filter_size, filter_size, input_channels, num_filters).astype(cp.float32) * std
+        self.filters = helper.create_orthogonal_matrix((filter_size, filter_size, input_channels, num_filters), std)
         self.biases = cp.full((1, 1, 1, num_filters), 0.).astype(cp.float32)
 
         self.stride = stride
