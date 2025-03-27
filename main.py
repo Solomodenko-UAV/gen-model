@@ -43,7 +43,7 @@ def train():
     start_time = time.time()
     # actor.run_training_loop(epochs=1, learning_rate=0.001)
     learning_rate = 1e-5
-    for i in range(10**2 * 1):
+    for i in range(10**4 * 1):
         print(i)
         # if i % 80 == 0:
         #     learning_rate *= 1.3
@@ -88,9 +88,9 @@ def debug():
     actor.debug()
 
 
-train()
 # test()
 # check()
 # test_gradient()
 
-#debug()
+train()
+# debug()

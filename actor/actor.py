@@ -288,6 +288,22 @@ class YOLOActorPhoto():
         return losses[-1] if losses else None
 
     def debug(self):
+        img_path = self.data_folder + "/0000001_02999_d_0000005.jpg"
+
+        self._find_out_default_anchors()
+        img, img_downscaled = self._prepare_single_image(img_path)
+        grid_cell_size = (img_downscaled.shape[0] / self.model.S, img_downscaled.shape[1] / self.model.S)
+        _, ax1 = plt.subplots(1, 1, figsize=(12, 12))  # Ensure figsize is a tuple
+        ax1.imshow(img)
+        for i, anchor in enumerate(self.default_bounding_box_offsets):
+            w = anchor[0] * grid_cell_size[1] * img.shape[1] // img_downscaled.shape[1]
+            h = anchor[1] * grid_cell_size[0] * img.shape[0] // img_downscaled.shape[0]
+
+            rect = patches.Rectangle((i * 10, i * 20), w, h, linewidth=1, edgecolor='r', facecolor='none')
+            ax1.add_patch(rect)
+
+        plt.show()
+
         losses = []
         for i in range(10**1):
             print(i)
@@ -295,7 +311,6 @@ class YOLOActorPhoto():
             losses.append(loss)
 
         norm_weights, activations = self.model.gather_debug_data()
-        import matplotlib.pyplot as plt
 
         # Assuming `losses` is a list of arrays or a single array
         # plt.figure(figsize=(10, 6))
@@ -684,7 +699,7 @@ class YOLOActorPhoto():
         for i, image_file_name in enumerate(entries):
             img, img_downscaled = self._prepare_single_image(os.path.join(self.data_folder, image_file_name))
             annotations = _extract_visDrone_annotations(os.path.join(self.annotation_folder, image_file_name.split('.')[0]) + ".txt")
-            annotations_downscaled = _downscale_annotation(annotations, img.shape[0] // img_downscaled.shape[0], img.shape[1] // img_downscaled.shape[1])
+            annotations_downscaled = _downscale_annotation(annotations, img.shape[0] / img_downscaled.shape[0], img.shape[1] / img_downscaled.shape[1])
 
             grid_cell_size = (img_downscaled.shape[0] / self.model.S, img_downscaled.shape[1] / self.model.S)
 
@@ -790,10 +805,10 @@ def _downscale_annotation(annotations: list, factor_H: int, factor_W: int):
 
     annotation_downscaled = [list(annotation) for annotation in annotations]
     for i in range(len(annotations)):
-        annotation_downscaled[i][visDrone.top_left_x_idx] = annotation_downscaled[i][visDrone.top_left_x_idx] // factor_W + 1e-6
-        annotation_downscaled[i][visDrone.top_left_y_idx] = annotation_downscaled[i][visDrone.top_left_y_idx] // factor_H + 1e-6
-        annotation_downscaled[i][visDrone.width_idx] = annotation_downscaled[i][visDrone.width_idx] // factor_W + 1e-6
-        annotation_downscaled[i][visDrone.height_idx] = annotation_downscaled[i][visDrone.height_idx] // factor_H + 1e-6
+        annotation_downscaled[i][visDrone.top_left_x_idx] = annotation_downscaled[i][visDrone.top_left_x_idx] / factor_W
+        annotation_downscaled[i][visDrone.top_left_y_idx] = annotation_downscaled[i][visDrone.top_left_y_idx] / factor_H
+        annotation_downscaled[i][visDrone.width_idx] = annotation_downscaled[i][visDrone.width_idx] / factor_W
+        annotation_downscaled[i][visDrone.height_idx] = annotation_downscaled[i][visDrone.height_idx] / factor_H
 
     return annotation_downscaled
 
