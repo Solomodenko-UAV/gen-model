@@ -100,15 +100,15 @@ class YoloOutput:
 
             A[:, :, :, confidence_idx] = activations.sigmoid(A[:, :, :, confidence_idx])
 
-            if anchors is not None:
-                anchor_w, anchor_h = anchors[b]
-                w = anchor_w * cp.exp(A[:, :, :, width_idx])  # relative width
-                h = anchor_h * cp.exp(A[:, :, :, height_idx])  # relative height
-                A[:, :, :, width_idx] = w
-                A[:, :, :, height_idx] = h
+            # if anchors is not None:
+            anchor_w, anchor_h = anchors[b]
+            w = anchor_w * cp.exp(A[:, :, :, width_idx])  # relative width
+            h = anchor_h * cp.exp(A[:, :, :, height_idx])  # relative height
+            A[:, :, :, width_idx] = w
+            A[:, :, :, height_idx] = h
 
-                self.cache[f'w_{b}'] = w
-                self.cache[f'h_{b}'] = h
+            self.cache[f'w_{b}'] = w
+            self.cache[f'h_{b}'] = h
 
         A[:, :, :, self.B * 5:] = activations.softmax(A[:, :, :, self.B * 5:])  # apply softmax to class scores
         self.cache['Z'] = A  # after activation

@@ -7,17 +7,15 @@ import platform
 
 
 # model = TinysimmoYOLOModel(model_path='model', S=4, B=2, C=1)
-# model = TinysimmoYOLOModel(model_path='./model', S=4, B=2, C=11)  # TODO: rollback
-model = TinysimmoYOLOModel(model_path='./model', S=40, B=5, C=11)  # TODO: rollback
+model = TinysimmoYOLOModel(model_path='./model', S=4, B=2, C=11)  # TODO: rollback
+# model = TinysimmoYOLOModel(model_path='./model', S=40, B=5, C=11)  # TODO: rollback
 
 model.create_new_model(
     image_size=(88, 88),
-    # conv_l2_lambda=0.0001,
-    conv_l2_lambda=0.,
-    fc_l2_lambda=0.,
-    # fc_l2_lambda=0.0001,
-    clip_value=5.0,
-    conv_momentum=0.8,
+    conv_l2_lambda=0.001,
+    fc_l2_lambda=0.001,
+    # clip_value=5.0,
+    conv_momentum=0.08,
 )
 
 if platform.system() == "Windows":
@@ -44,7 +42,7 @@ actor = YOLOActorPhoto(
 def train():
     start_time = time.time()
     # actor.run_training_loop(epochs=1, learning_rate=0.001)
-    learning_rate = 1e-4
+    learning_rate = 1e-5
     for i in range(10**2 * 1):
         print(i)
         # if i % 80 == 0:
@@ -85,9 +83,14 @@ def check():
 
 def test_gradient():
     actor._test_gradient()
+    
+def debug():
+    actor.debug()
 
 
 train()
 # test()
 # check()
 # test_gradient()
+
+#debug()

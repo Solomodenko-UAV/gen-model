@@ -40,11 +40,11 @@ class TinysimmoYOLOModel:
                          conv_momentum=0.8
                          ):
         self.conv_blocks = [
-            ConvBlock(first_layer_num_of_filters=16, second_layer_num_of_filters=16, input_channels=3, l2_lambda=conv_l2_lambda, clip_value=clip_value, momentum=conv_momentum),
-            ConvBlock(first_layer_num_of_filters=16, second_layer_num_of_filters=32, input_channels=16, l2_lambda=conv_l2_lambda, clip_value=clip_value, momentum=conv_momentum),
-            ConvBlock(first_layer_num_of_filters=32, second_layer_num_of_filters=64, input_channels=32, l2_lambda=conv_l2_lambda, clip_value=clip_value, momentum=conv_momentum),
-            ConvBlock(first_layer_num_of_filters=64, second_layer_num_of_filters=64, input_channels=64, l2_lambda=conv_l2_lambda, clip_value=clip_value, momentum=conv_momentum),
-            ConvBlock(first_layer_num_of_filters=128, second_layer_num_of_filters=128, input_channels=64, l2_lambda=conv_l2_lambda, clip_value=clip_value, momentum=conv_momentum),
+            ConvBlock(first_layer_num_of_filters=16, second_layer_num_of_filters=16, input_channels=3, l2_lambda=conv_l2_lambda, clip_value=clip_value, momentum=conv_momentum, strategy='cmc'),
+            ConvBlock(first_layer_num_of_filters=16, second_layer_num_of_filters=32, input_channels=16, l2_lambda=conv_l2_lambda, clip_value=clip_value, momentum=conv_momentum, strategy='cmc'),
+            ConvBlock(first_layer_num_of_filters=32, second_layer_num_of_filters=64, input_channels=32, l2_lambda=conv_l2_lambda, clip_value=clip_value, momentum=conv_momentum, strategy='cmc'),
+            ConvBlock(first_layer_num_of_filters=64, second_layer_num_of_filters=64, input_channels=64, l2_lambda=conv_l2_lambda, clip_value=clip_value, momentum=conv_momentum, strategy='cmc'),
+            ConvBlock(first_layer_num_of_filters=128, second_layer_num_of_filters=128, input_channels=64, l2_lambda=conv_l2_lambda, clip_value=clip_value, momentum=conv_momentum, strategy='ccm'),
         ]
 
         for block in self.conv_blocks:

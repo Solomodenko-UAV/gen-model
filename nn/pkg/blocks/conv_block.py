@@ -16,6 +16,9 @@ conv_padding = 1
 maxpool_stride = 2
 maxpool_filter_size = 2
 
+activation_func = activations.gelu
+activation_derivative = activations.gelu_derivative
+
 
 class ConvBlock:
     def __init__(self,
@@ -24,7 +27,8 @@ class ConvBlock:
                  input_channels: int,
                  l2_lambda: float = 0.0001,
                  clip_value: float = 5.0,
-                 momentum=0.8
+                 momentum=0.8,
+                 strategy='cmc'  # cmc or ccm
                  ):
 
         self.conv1 = Convolution(
@@ -53,8 +57,9 @@ class ConvBlock:
             pool_size=maxpool_filter_size,
             stride=maxpool_stride,
         )
-        
+
         self.activation_values = []
+        self.strategy = strategy
 
     def forward(self, X: cp.ndarray):
         """
@@ -67,20 +72,10 @@ class ConvBlock:
             Z (cp.ndarray): output of the convolution block - matrix of shape (m, output_height, output_width, num_output_channels), represents a batch of m images
         """
 
-        A_conv1 = self.conv1.convolve_forward_vectorized(X)
-        Z_conv1 = activations.relu(A_conv1)
-        
-        self.activation_values.append(("conv1_mean", cp.mean(A_conv1), "conv1_median", cp.median(A_conv1)))
-        
-        
-        A_conv2 = self.conv2.convolve_forward_vectorized(Z_conv1)
-        Z_conv2 = activations.relu(A_conv2)
-        self.activation_values.append(("conv2_mean", cp.mean(A_conv1), "conv2_median", cp.median(A_conv1)))
+        if self.strategy == 'cmc':
+            return self.cmc_forward(X)
 
-        
-        Z = self.maxpool.pool_forward_vectorized(Z_conv2)
-
-        return Z
+        return self.ccm_forward(X)
 
     def backward(self, dZ: cp.ndarray, learning_rate: float):
         """
@@ -94,10 +89,103 @@ class ConvBlock:
             dA(cp.ndarray): gradient of the cost with respect to the input of the convolution block - matrix of shape (m, height, width, num_input_channels), represents a batch of m images
         """
 
+        if self.strategy == 'cmc':
+            return self.cmc_backward(dZ, learning_rate)
+
+        return self.ccm_backward(dZ, learning_rate)
+
+    # conv1, conv2, maxpool
+    def ccm_forward(self, X: cp.ndarray):
+        """
+        forward pass of the convolution block
+
+        Args:
+            X (cp.ndarray): input to the convolution block - matrix of shape (m, height, width, num_input_channels), represents a batch of m images
+
+        Returns:
+            Z (cp.ndarray): output of the convolution block - matrix of shape (m, output_height, output_width, num_output_channels), represents a batch of m images
+        """
+
+        A_conv1 = self.conv1.convolve_forward_vectorized(X)
+        Z_conv1 = activation_func(A_conv1)
+
+        self.activation_values.append(("conv1_mean", cp.mean(A_conv1), "conv1_median", cp.median(A_conv1)))
+
+        A_conv2 = self.conv2.convolve_forward_vectorized(Z_conv1)
+        Z_conv2 = activation_func(A_conv2)
+
+        self.activation_values.append(("conv2_mean", cp.mean(A_conv1), "conv2_median", cp.median(A_conv1)))
+
+        Z = self.maxpool.pool_forward_vectorized(Z_conv2)
+
+        return Z
+
+    # conv1, conv2, maxpool
+    def ccm_backward(self, dZ: cp.ndarray, learning_rate: float):
+        """
+        backward pass of the convolution block
+
+        Args:
+            dZ (cp.ndarray): gradient of the cost with respect to the output of the convolution block - matrix of shape (m, output_height, output_width, num_output_channels), represents a batch of m images
+            learning_rate (float): learning rate to be used for updating the weights and biases
+
+        Returns:
+            dA(cp.ndarray): gradient of the cost with respect to the input of the convolution block - matrix of shape (m, height, width, num_input_channels), represents a batch of m images
+        """
+
         dZ_maxpool = self.maxpool.pool_backward_vectorized(dZ)
-        dZ_conv2 = activations.relu_derivative(dZ_maxpool)
+        dZ_conv2 = activation_derivative(dZ_maxpool)
         dA_conv2, _ = self.conv2.convolve_backward_vectorized(dZ_conv2, learning_rate)
-        dZ_conv1 = activations.relu_derivative(dA_conv2)
+        dZ_conv1 = activation_derivative(dA_conv2)
+        dA, dW = self.conv1.convolve_backward_vectorized(dZ_conv1, learning_rate)
+
+        return dA, dW
+
+    # conv1, maxpool, conv2
+    def cmc_forward(self, X: cp.ndarray):
+        """
+        forward pass of the convolution block
+
+        Args:
+            X (cp.ndarray): input to the convolution block - matrix of shape (m, height, width, num_input_channels), represents a batch of m images
+
+        Returns:
+            Z (cp.ndarray): output of the convolution block - matrix of shape (m, output_height, output_width, num_output_channels), represents a batch of m images
+        """
+
+        A_conv1 = self.conv1.convolve_forward_vectorized(X)
+        Z_conv1 = activation_func(A_conv1)
+
+        self.activation_values.append(("conv1_mean", cp.mean(A_conv1), "conv1_median", cp.median(A_conv1)))
+
+        Z_maxpool = self.maxpool.pool_forward_vectorized(Z_conv1)
+
+        A_conv2 = self.conv2.convolve_forward_vectorized(Z_maxpool)
+        Z_conv2 = activation_func(A_conv2)
+
+        self.activation_values.append(("conv2_mean", cp.mean(A_conv1), "conv2_median", cp.median(A_conv1)))
+
+        return Z_conv2
+
+    # conv1, maxpool, conv2
+    def cmc_backward(self, dZ: cp.ndarray, learning_rate: float):
+        """
+        backward pass of the convolution block
+
+        Args:
+            dZ (cp.ndarray): gradient of the cost with respect to the output of the convolution block - matrix of shape (m, output_height, output_width, num_output_channels), represents a batch of m images
+            learning_rate (float): learning rate to be used for updating the weights and biases
+
+        Returns:
+            dA(cp.ndarray): gradient of the cost with respect to the input of the convolution block - matrix of shape (m, height, width, num_input_channels), represents a batch of m images
+        """
+
+        dZ_conv2 = activation_derivative(dZ)
+        dA_conv2, _ = self.conv2.convolve_backward_vectorized(dZ_conv2, learning_rate)
+
+        dA_maxpool = self.maxpool.pool_backward_vectorized(dA_conv2)
+
+        dZ_conv1 = activation_derivative(dA_maxpool)
         dA, dW = self.conv1.convolve_backward_vectorized(dZ_conv1, learning_rate)
 
         return dA, dW

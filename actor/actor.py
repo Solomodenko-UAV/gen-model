@@ -1,4 +1,4 @@
-import helper.helper as helper
+from nn.pkg.activations.activations import sigmoid
 from nn.pkg.models.tinysimmoYOLO import TinysimmoYOLOModel
 from metadata import visDrone
 import matplotlib.patches as patches
@@ -119,7 +119,7 @@ class YOLOActorPhoto():
                         boxes_per_image = boxes_data[i]
                         for box in boxes_per_image:
                             x, y, w, h, obj_class, score = box
-                            rect = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='r', facecolor='none')
+                            rect = patches.Rectangle((x, y - h), w, h, linewidth=1, edgecolor='r', facecolor='none')
                             ax1.add_patch(rect)
                             # ax1.text(x, y - 20, f"{visDrone.categories.get(int(obj_class))} {score:.2f}", color='r', fontsize=10, bbox=dict(facecolor='white', alpha=0.5))
 
@@ -132,7 +132,7 @@ class YOLOActorPhoto():
                         boxes_per_image = boxes_data[i]
                         for box in boxes_per_image:
                             x, y, w, h, obj_class, score = box
-                            rect = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='b', facecolor='none')
+                            rect = patches.Rectangle((x, y - h), w, h, linewidth=1, edgecolor='b', facecolor='none')
                             ax2.add_patch(rect)
                             # ax2.text(x, y - 20, f"{visDrone.categories.get(int(obj_class))} {score:.2f}", color='b', fontsize=10, bbox=dict(facecolor='white', alpha=0.5))
 
@@ -289,7 +289,7 @@ class YOLOActorPhoto():
 
     def debug(self):
         losses = []
-        for i in range(10**2):
+        for i in range(10**1):
             print(i)
             loss = self.run_training_loop(epochs=-1, learning_rate=1e-4, start_image_idx=0, print_loss=False)
             losses.append(loss)
@@ -401,8 +401,8 @@ class YOLOActorPhoto():
             bbox_target = np.array([
                 X_cells_offset[i],
                 Y_cells_offset[i],
-                Y_norm[i, visDrone.width_idx],
-                Y_norm[i, visDrone.height_idx],
+                Y_norm[i, visDrone.width_idx] / cell_width,
+                Y_norm[i, visDrone.height_idx] / cell_height,
                 1,
             ])
 
@@ -540,17 +540,19 @@ class YOLOActorPhoto():
                             loss += lambda_coord * (diff ** 2)
                             grad_A[i, row, col, idx + j] += 2 * lambda_coord * diff
 
-                        ious = helper.compute_iou_for_anchors(pred_bbox[visDrone.width_idx:visDrone.height_idx + 1], self.default_bounding_box_offsets)
-                        best_anchor_idx = cp.argmax(ious)
+                        # ious = helper.compute_iou_for_anchors(pred_bbox[visDrone.width_idx:visDrone.height_idx + 1], self.default_bounding_box_offsets)
+                        # best_anchor_idx = cp.argmax(ious)
+                        best_anchor_idx = b
                         anchor_w, anchor_h = self.default_bounding_box_offsets[best_anchor_idx]
 
                         # calc target adjustments (ground truth relative to anchor):
-                        target_tw = cp.log(target_bbox[visDrone.width_idx] / (anchor_w + 1e-6))
-                        target_th = cp.log(target_bbox[visDrone.height_idx] / (anchor_h + 1e-6))
+
+                        target_tw = cp.log(target_bbox[visDrone.width_idx] / anchor_w + 1e-6)
+                        target_th = cp.log(target_bbox[visDrone.height_idx] / anchor_h + 1e-6)
 
                         # calc predicted adjustments
-                        pred_tw = cp.log(pred_bbox[visDrone.width_idx] / (anchor_w + 1e-6))
-                        pred_th = cp.log(pred_bbox[visDrone.height_idx] / (anchor_h + 1e-6))
+                        pred_tw = cp.log(pred_bbox[visDrone.width_idx] / anchor_w + 1e-6)
+                        pred_th = cp.log(pred_bbox[visDrone.height_idx] / anchor_h + 1e-6)
 
                         diff_w = pred_tw - target_tw
                         diff_h = pred_th - target_th
@@ -572,9 +574,8 @@ class YOLOActorPhoto():
                         grad_class = pred_class - target_class  # Derivative of cross-entropy with softmax
                         grad_A[i, row, col, B * 5:] += grad_class
 
-        # TODO: maybe I should remove it since I already have this in weights
-        max_grad_norm = 1.0
-        grad_A = cp.clip(grad_A, -max_grad_norm, max_grad_norm)
+        # max_grad_norm = 1.0
+        # grad_A = cp.clip(grad_A, -max_grad_norm, max_grad_norm)
 
         mean_loss = loss / (m * S * S)
         return mean_loss.item(), grad_A
@@ -594,38 +595,41 @@ class YOLOActorPhoto():
         m = model_output.shape[0]
         B = self.model.B
         S = self.model.S
-        boxes_pred = model_output[..., :B * 5]  # shape (m, S, S, B*5)
-        boxes_pred = boxes_pred.reshape(m, S, S, B, 5)
 
-        classes_probs = model_output[..., B * 5:]  # shape (m, S, S, C)
-        predicted_class_indices = cp.argmax(classes_probs, axis=-1)  # shape (m, S, S)
-        predicted_class_probabilities = cp.max(classes_probs, axis=-1)  # shape (m, S, S)
+        cell_width = self.model_input_img_res[0] / S
+        cell_height = self.model_input_img_res[1] / S
 
         boxes = cp.zeros((m, S, S, B, 6))
 
-        cell_width = self.model_input_img_res[0] // S
-        cell_height = self.model_input_img_res[1] // S
-
-        for i in range(boxes_pred.shape[0]):
-            for row in range(boxes_pred.shape[1]):
-                for col in range(boxes_pred.shape[2]):
+        for i in range(m):
+            for row in range(S):
+                for col in range(S):
                     for b in range(B):
-                        x, y, w, h, confidence = boxes_pred[i, row, col, b, :]
+                        tx = model_output[i, row, col, b * 5 + 0]
+                        ty = model_output[i, row, col, b * 5 + 1]
+                        tw = model_output[i, row, col, b * 5 + 2]
+                        th = model_output[i, row, col, b * 5 + 3]
+                        confidence = model_output[i, row, col, b * 5 + 4]
 
-                        x_center_abs = (row + x) * cell_width
-                        y_center_abs = (i + y) * cell_height
+                        # constrain offsets to [0, 1] within the grid cell
+                        x = sigmoid(tx)
+                        y = sigmoid(ty)
 
-                        w_abs = w * self.model_input_img_res[0]
-                        h_abs = h * self.model_input_img_res[1]
+                        x_center_abs = (col + x) * cell_width
+                        y_center_abs = (row + y) * cell_height
+
+                        # already scaled by anchor in feed_forward
+                        w_abs = tw * cell_width
+                        h_abs = th * cell_height
 
                         x1 = x_center_abs - w_abs / 2
                         y1 = y_center_abs - h_abs / 2
 
-                        obj_class_probability = predicted_class_probabilities[i, row, col]
-                        obj_class = predicted_class_indices[i, row, col]
-                        score = obj_class_probability * confidence
+                        class_probs = model_output[i, row, col, B*5:]
+                        class_id = cp.argmax(class_probs)
+                        score = cp.max(class_probs) * confidence
 
-                        boxes[i, row, col, b, :] = cp.array([x1, y1, w_abs, h_abs, obj_class, score])
+                        boxes[i, row, col, b] = cp.array([x1, y1, w_abs, h_abs, class_id, score])
 
         predicted_boxes = boxes.reshape(m, -1, boxes.shape[-1])
 
@@ -682,11 +686,13 @@ class YOLOActorPhoto():
             annotations = _extract_visDrone_annotations(os.path.join(self.annotation_folder, image_file_name.split('.')[0]) + ".txt")
             annotations_downscaled = _downscale_annotation(annotations, img.shape[0] // img_downscaled.shape[0], img.shape[1] // img_downscaled.shape[1])
 
-            grid_cell_size = (img_downscaled.shape[0] // self.model.S, img_downscaled.shape[1] // self.model.S)
+            grid_cell_size = (img_downscaled.shape[0] / self.model.S, img_downscaled.shape[1] / self.model.S)
 
             for annotation in annotations_downscaled:
-                boxes.append([annotation[visDrone.width_idx] / img.shape[1] * grid_cell_size[1],
-                              annotation[visDrone.height_idx] / img.shape[0] * grid_cell_size[0]])
+                # boxes.append([annotation[visDrone.width_idx] / img_downscaled.shape[1] * grid_cell_size[1],
+                #               annotation[visDrone.height_idx] / img_downscaled.shape[0] * grid_cell_size[0]])
+                boxes.append([annotation[visDrone.width_idx] / grid_cell_size[1],
+                              annotation[visDrone.height_idx] / grid_cell_size[0]])
 
         res = _kmeans(boxes=np.array(boxes), k=self.model.B)
         self.default_bounding_box_offsets = res

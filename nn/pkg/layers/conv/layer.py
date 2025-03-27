@@ -8,6 +8,7 @@ if on_cpu:
 else:
     import cupy as cp
 
+
 class Convolution:
 
     def __init__(self,
@@ -48,7 +49,7 @@ class Convolution:
 
         std = cp.sqrt(2 / (input_channels * filter_size**2)).astype(cp.float32)  # Xavier for ReLU
         self.filters = helper.create_orthogonal_matrix((filter_size, filter_size, input_channels, num_filters), std)
-        self.biases = cp.full((1, 1, 1, num_filters), 0.).astype(cp.float32)
+        self.biases = cp.full((1, 1, 1, num_filters), 1.2).astype(cp.float32)
 
         self.stride = stride
         self.padding = padding
@@ -62,7 +63,7 @@ class Convolution:
 
         self.running_mean = cp.zeros((1, 1, 1, self.filters.shape[3]))  # initial activations are assumed to be centered around zero
         self.running_variance = cp.ones((1, 1, 1, self.filters.shape[3]))  # variance shouldn't start at 0 (to avoid division by zero).
-        
+
         self.weight_norms = []
 
     def zero_pad(self, X: cp.ndarray):
@@ -93,49 +94,6 @@ class Convolution:
         filters = self.filters.reshape(-1, self.filters.shape[3])  # (filter_size * filter_size * num_filters, num_filters)
 
         return cp.dot(X_col, filters) + self.biases.reshape(-1)  # (1, num_filters)
-
-    def convolve_forward(self, X: cp.ndarray):
-        """
-            convolves the input with the predefined filters
-
-        Args:
-            X (cp.ndarray): output activations of the previous layer - matrix of shape (m, height, width, input_channels)
-
-        Returns:
-            Z (cp.ndarray): output of the convolution - matrix of shape (m, output_height, output_width, num_filters)
-        """
-
-        (m, prev_height, prev_width, _) = X.shape
-
-        filter_size = self.filters.shape[0]
-        num_filters = self.filters.shape[3]
-
-        output_height = int((prev_height - filter_size + 2 * self.padding) / self.stride) + 1  # just a formula to calculate the output height
-        output_width = int((prev_width - filter_size + 2 * self.padding) / self.stride) + 1  # just a formula to calculate the output width
-
-        Z = cp.zeros((m, output_height, output_width, num_filters))
-        X_padded = self.zero_pad(X)
-
-        for i in range(m):
-            x = X_padded[i]
-
-            for h in range(output_height):
-                vert_start = h * self.stride
-                vert_end = vert_start + filter_size
-
-                for w in range(output_width):
-                    horiz_start = w * self.stride
-                    horiz_end = horiz_start + filter_size
-
-                    part_to_convolve = x[vert_start:vert_end, horiz_start:horiz_end, :]
-
-                    Z[i, h, w, :] = self.convolve_single_step(part_to_convolve)
-
-        Z, batch_cache = self._normalize_forward(Z)
-
-        self.cache = (X, batch_cache)
-
-        return Z
 
     def convolve_forward_vectorized(self, X: cp.ndarray):
         """
@@ -184,66 +142,6 @@ class Convolution:
 
         return conv_out
 
-    def convolve_backward(self, dZ: cp.ndarray, learning_rate: float):
-        """
-        backward propagation for a convolution function
-
-        Args:
-            dZ (cp.ndarray): gradient of the cost with respect to the output of the conv layer (Z), matrix shape (m, output_height, output_width, num_filters)
-            learning_rate (float): learning rate for the optimization
-
-        Returns:
-            dX (cp.ndarray): gradient of the input (X), matrix shape (m, height, width, input_channels)
-        """
-
-        X = self.cache[0]
-        (m, output_height, output_width, num_filters) = dZ.shape
-
-        filter_size = self.filters.shape[0]
-
-        dX = cp.zeros(X.shape)
-        dW = cp.zeros(self.filters.shape)
-        db = cp.zeros(self.biases.shape)
-
-        X_padded = self.zero_pad(X)
-        dX_padded = self.zero_pad(dX)
-
-        dZ, dgamma, dbeta = self._normalize_backward(dZ)
-
-        for i in range(m):
-            x_padded = X_padded[i]
-            dx_padded = dX_padded[i]
-
-            for h in range(output_height):
-                vert_start = h * self.stride
-                vert_end = vert_start + filter_size
-
-                for w in range(output_width):
-                    horiz_start = w * self.stride
-                    horiz_end = horiz_start + filter_size
-
-                    for c in range(num_filters):
-                        dx_padded[vert_start:vert_end, horiz_start:horiz_end, :] += self.filters[:, :, :, c] * dZ[i, h, w, c]
-                        dW[:, :, :, c] += x_padded[vert_start:vert_end, horiz_start:horiz_end, :] * dZ[i, h, w, c]
-                        db[:, :, :, c] += dZ[i, h, w, c]
-
-            # remove padding if necessary
-            if self.padding == 0:
-                dX[i, :, :, :] = dx_padded
-            else:
-                dX[i, :, :, :] = dx_padded[self.padding:-self.padding, self.padding:-self.padding, :]
-
-        # dW = cp.clip(dW, -self.clip_value, self.clip_value)
-        # db = cp.clip(db, -self.clip_value, self.clip_value)
-
-        self.filters -= learning_rate * (dW + self.l2_lambda * self.filters)  # L2 regularization
-        self.biases -= db * learning_rate
-
-        self.gamma -= learning_rate * dgamma
-        self.beta -= learning_rate * dbeta
-
-        return dX
-
     def convolve_backward_vectorized(self, dZ: cp.ndarray, learning_rate: float):
         """
         backward propagation for a convolution function
@@ -279,7 +177,7 @@ class Convolution:
 
         self.gamma -= learning_rate * dgamma
         self.beta -= learning_rate * dbeta
-        
+
         self.weight_norms.append(cp.linalg.norm(self.filters))
 
         return dX, dW
@@ -294,31 +192,56 @@ class Convolution:
         """
         mean = cp.mean(Z, axis=(0, 1, 2), keepdims=True)
         variance = cp.var(Z, axis=(0, 1, 2), keepdims=True)
+
         Z_norm = (Z - mean) / cp.sqrt(variance + self.eps)
         out = self.gamma * Z_norm + self.beta
+
         self.running_mean = self.momentum * self.running_mean + (1 - self.momentum) * mean
         self.running_variance = self.momentum * self.running_variance + (1 - self.momentum) * variance
+
         cache = (Z, Z_norm, mean, variance)
+
         return out, cache
 
     def _normalize_backward(self, dZ):
+        """
+        Backward pass for the batch normalization layer
+
+        Args:
+            dZ (cp.ndarray): gradient of the cost with respect to the output of the conv layer (Z), matrix shape (m, output_height, output_width, num_filters)
+
+        Returns:
+            dZ_norm (cp.ndarray): gradient of the cost with respect to the normalized output of the conv layer (Z_norm), matrix shape (m, output_height, output_width, num_filters)
+            dgamma (cp.ndarray): gradient of the cost with respect to the scale parameter gamma, matrix shape (1, 1, 1, num_filters)
+            dbeta (cp.ndarray): gradient of the cost with respect to the shift parameter beta, matrix shape (1, 1, 1, num_filters)
+        """
         (Z, Z_norm, mean, variance) = self.cache[1]
-        m = Z.shape[0]
+
+        m, height, weight, _ = Z.shape
+        numbers = m * height * weight  # total numbers per channel
 
         # Gradients scale (gamma) and shift (beta)
         dgamma = cp.sum(dZ * Z_norm, axis=(0, 1, 2), keepdims=True)
         dbeta = cp.sum(dZ, axis=(0, 1, 2), keepdims=True)
+
+        # Gradient of Z_norm
         dZ_norm = dZ * self.gamma
 
         # Gradient of variance
-        dvar = cp.sum(dZ_norm * (Z - mean) * -0.5 * cp.power(variance + self.eps, -1.5), axis=0, keepdims=True)
+        dvar = cp.sum(dZ_norm * (Z - mean) * (-0.5) * (variance + self.eps)**(-1.5), axis=(0, 1, 2), keepdims=True)
 
         # Gradient of mean
-        dmean = cp.sum(dZ_norm * -1 / cp.sqrt(variance + self.eps), axis=0, keepdims=True) + dvar * cp.mean(-2 * (Z - mean), axis=0, keepdims=True)
+        dmean_term1 = cp.sum(dZ_norm * (-1 / cp.sqrt(variance + self.eps)), axis=(0, 1, 2), keepdims=True)
+        dmean_term2 = dvar * (-2 / numbers) * cp.sum(Z - mean, axis=(0, 1, 2), keepdims=True)
+        dmean = dmean_term1 + dmean_term2
 
-        dZ_norm = dZ_norm / cp.sqrt(variance + self.eps) + dvar * 2 * (Z - mean) / m + dmean / m
+        # Gradient of Z
+        dZ_1 = dZ_norm / cp.sqrt(variance + self.eps)
+        dZ_2 = dvar * 2 * (Z - mean) / numbers
+        dZ_3 = dmean / numbers
+        dZ = dZ_1 + dZ_2 + dZ_3
 
-        return dZ_norm, dgamma, dbeta
+        return dZ, dgamma, dbeta
 
     def get_params(self, params: dict, key: str):
         params[f'{key}_filters'] = self.filters if on_cpu else cp.asnumpy(self.filters)
