@@ -47,6 +47,20 @@ class YoloOutput:
         self.l2_lambda = l2_lambda
         self.clip_value = clip_value
 
+        self.eps = 1e-7
+
+        # Adadelta
+        self.rho = 0.95
+        self.E_g_weights = cp.zeros_like(self.weights)
+        self.E_delta_weights = cp.zeros_like(self.weights)
+        self.E_g_biases = cp.zeros_like(self.biases)
+        self.E_delta_biases = cp.zeros_like(self.biases)
+
+        #   RMSProp
+        # self.decay_rate = 0.9
+        # self.cache_weights = cp.zeros_like(self.weights)
+        # self.cache_biases = cp.zeros_like(self.biases)
+
         for b in range(B):
             width_idx = b * 5 + 2
             height_idx = b * 5 + 3
@@ -167,8 +181,20 @@ class YoloOutput:
 
         dX = cp.dot(dX_pre, self.weights.T)  # shape (m, input_size)
 
-        self.weights -= learning_rate * (dW + self.l2_lambda * self.weights)  # L2 regularization
-        self.biases -= db * learning_rate
+        # self.weights -= learning_rate * (dW + self.l2_lambda * self.weights)  # L2 regularization
+        # self.biases -= db * learning_rate
+
+        grad_weights = dW + self.l2_lambda * self.weights
+        
+        # Adadelta
+        helper.adadelta_update(self.weights, grad_weights, self.E_g_weights, self.E_delta_weights, self.rho, self.eps)
+        helper.adadelta_update(self.biases, db, self.E_g_biases, self.E_delta_biases, self.rho, self.eps)
+        
+        # RMSProp
+        # self.cache_weights = helper.rmsprop_update(self.weights, grad_weights, self.cache_weights,
+        #                                            decay_rate=self.decay_rate, learning_rate=learning_rate, eps=self.eps)
+        # self.cache_biases = helper.rmsprop_update(self.biases, db, self.cache_biases,
+        #                                           decay_rate=self.decay_rate, learning_rate=learning_rate, eps=self.eps)
 
         self.weight_norms.append(cp.linalg.norm(self.weights))
 

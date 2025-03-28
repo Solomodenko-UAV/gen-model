@@ -112,12 +112,12 @@ class ConvBlock:
         A_conv1 = self.conv1.convolve_forward_vectorized(X)
         Z_conv1 = self.conv1_activation.forward(A_conv1)
 
-        self.activation_values.append(("conv1_mean", cp.mean(A_conv1), "conv1_median", cp.median(A_conv1)))
+        # self.activation_values.append(("conv1_mean", cp.mean(A_conv1), "conv1_median", cp.median(A_conv1)))
 
         A_conv2 = self.conv2.convolve_forward_vectorized(Z_conv1)
         Z_conv2 = self.conv2_activation.forward(A_conv2)
 
-        self.activation_values.append(("conv2_mean", cp.mean(A_conv1), "conv2_median", cp.median(A_conv1)))
+        # self.activation_values.append(("conv2_mean", cp.mean(A_conv1), "conv2_median", cp.median(A_conv1)))
 
         Z = self.maxpool.pool_forward_vectorized(Z_conv2)
 

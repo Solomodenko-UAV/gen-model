@@ -58,7 +58,6 @@ class Convolution:
         self.l2_lambda = l2_lambda
         self.clip_value = clip_value
         self.momentum = momentum
-        self.eps = 1e-5
         self.gamma = cp.ones((1, 1, 1, num_filters)).astype(cp.float32)  # activations remain unaffected at the start
         self.beta = cp.zeros((1, 1, 1, num_filters)).astype(cp.float32)  # no initial shift
 
@@ -66,6 +65,26 @@ class Convolution:
         self.running_variance = cp.ones((1, 1, 1, self.filters.shape[3]))  # variance shouldn't start at 0 (to avoid division by zero).
 
         self.weight_norms = []
+
+        self.eps = 1e-7
+
+        # AdaDelta hyperparameter (typical value ~0.95) and accumulators for each parameter
+        self.rho = 0.95
+        self.E_g_filters = cp.zeros_like(self.filters)
+        self.E_delta_filters = cp.zeros_like(self.filters)
+        self.E_g_biases = cp.zeros_like(self.biases)
+        self.E_delta_biases = cp.zeros_like(self.biases)
+        self.E_g_gamma = cp.zeros_like(self.gamma)
+        self.E_delta_gamma = cp.zeros_like(self.gamma)
+        self.E_g_beta = cp.zeros_like(self.beta)
+        self.E_delta_beta = cp.zeros_like(self.beta)
+
+        # RMSProp
+        # self.decay_rate = 0.9
+        # self.cache_filters = cp.zeros_like(self.filters)
+        # self.cache_biases = cp.zeros_like(self.biases)
+        # self.cache_gamma = cp.zeros_like(self.gamma)
+        # self.cache_beta = cp.zeros_like(self.beta)
 
     def zero_pad(self, X: cp.ndarray):
         """
@@ -173,11 +192,35 @@ class Convolution:
 
         db = cp.sum(dZ, axis=(0, 1, 2), keepdims=True)
 
-        self.filters -= learning_rate * (dW + self.l2_lambda * self.filters)  # L2 regularization
-        self.biases -= db * learning_rate
+        # self.filters -= learning_rate * (dW + self.l2_lambda * self.filters)  # L2 regularization
+        # self.biases -= db * learning_rate
 
-        self.gamma -= learning_rate * dgamma
-        self.beta -= learning_rate * dbeta
+        # self.gamma -= learning_rate * dgamma
+        # self.beta -= learning_rate * dbeta
+
+        # self.weight_norms.append(cp.linalg.norm(self.filters))
+
+        # Include L2 regularization for filters
+        grad_filters = dW + self.l2_lambda * self.filters
+
+        # Update filters using AdaDelta.
+        helper.adadelta_update(self.filters, grad_filters, self.E_g_filters, self.E_delta_filters, self.rho, self.eps)
+        # Update biases using AdaDelta.
+        helper.adadelta_update(self.biases, db, self.E_g_biases, self.E_delta_biases, self.rho, self.eps)
+        # Update gamma and beta from batch normalization.
+        helper.adadelta_update(self.gamma, dgamma, self.E_g_gamma, self.E_delta_gamma, self.rho, self.eps)
+        helper.adadelta_update(self.beta, dbeta, self.E_g_beta, self.E_delta_beta, self.rho, self.eps)
+
+        # RMSProp
+        # self.cache_filters = helper.rmsprop_update(self.filters, grad_filters, self.cache_filters,
+        #                                            decay_rate=self.decay_rate, learning_rate=learning_rate, eps=self.eps)
+        # self.cache_biases = helper.rmsprop_update(self.biases, db, self.cache_biases,
+        #                                           decay_rate=self.decay_rate, learning_rate=learning_rate, eps=self.eps)
+
+        # self.cache_gamma = helper.rmsprop_update(self.gamma, dgamma, self.cache_gamma,
+        #                                          decay_rate=self.decay_rate, learning_rate=learning_rate, eps=self.eps)
+        # self.cache_beta = helper.rmsprop_update(self.beta, dbeta, self.cache_beta,
+        #                                         decay_rate=self.decay_rate, learning_rate=learning_rate, eps=self.eps)
 
         self.weight_norms.append(cp.linalg.norm(self.filters))
 

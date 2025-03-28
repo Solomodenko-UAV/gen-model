@@ -119,3 +119,36 @@ def create_orthogonal_2d_matrix(shape: tuple, gain: float = 1.0):
         W = vh[:shape[0], :]
 
     return gain * W
+
+
+def adadelta_update(param, grad, E_g, E_delta, rho, eps):
+    # Update the running average of squared gradients.
+    E_g[:] = rho * E_g + (1 - rho) * (grad ** 2)
+    # Compute the parameter update.
+    update = - cp.sqrt(E_delta + eps) / cp.sqrt(E_g + eps) * grad
+    # Apply the update.
+    param += update
+    # Update the running average of squared updates.
+    E_delta[:] = rho * E_delta + (1 - rho) * (update ** 2)
+    
+def rmsprop_update(param, grad, cache, decay_rate, learning_rate, eps):
+    """
+    RMSProp update rule.
+
+    Args:
+        param (cp.ndarray): Parameter to be updated.
+        grad (cp.ndarray): Gradient for the parameter.
+        cache (cp.ndarray): Running average of squared gradients.
+        decay_rate (float): Decay rate for the running average (typically around 0.9).
+        learning_rate (float): Learning rate for the update.
+        eps (float): Small epsilon to avoid division by zero.
+
+    Returns:
+        Updated cache (cp.ndarray). The parameter `param` is updated in-place.
+    """
+    # Update running average of squared gradients.
+    cache[:] = decay_rate * cache + (1 - decay_rate) * (grad ** 2)
+    # Compute the RMSProp update.
+    update = - learning_rate * grad / cp.sqrt(cache + eps)
+    param += update
+    return cache
