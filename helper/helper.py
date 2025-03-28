@@ -8,6 +8,7 @@ if on_cpu:
 else:
     import cupy as cp
 
+
 def calc_conv_layer_out_dim(image_dim: tuple, padding: int, kernel_size: int, stride: int):
     image_width, image_height = image_dim
     out_width = int((image_width + 2 * padding - kernel_size) / stride + 1)
@@ -41,30 +42,80 @@ def compute_iou_for_anchors(pred_box: cp.ndarray, anchors: cp.ndarray):
     return iou
 
 
-
-def create_orthogonal_matrix(shape: tuple, gain: float = 1.0):
+def create_orthogonal_4d_matrix(shape: tuple, gain: float = 1.0):
     """
-    Creates an orthogonal matrix of the given shape
+    Creates a 4D orthogonal matrix for convolutional layers.
+
+    This function assumes the weight shape is:
+        (filter_size, filter_size, input_channels, num_filters)
+    and returns a weight tensor of the same shape such that each filter (the last dimension)
+    is orthogonal with respect to its flattened version.
 
     Args:
-        shape (tuple): shape of the matrix to be created
-        gain (float): gain to be applied to the matrix
+        shape (tuple): (filter_size, filter_size, input_channels, num_filters)
+        gain (float): Gain factor to scale the weights.
 
     Returns:
-        cp.ndarray
-        """
+        cp.ndarray: Weight tensor of shape (filter_size, filter_size, input_channels, num_filters)
+    """
+    filter_height, filter_width, in_channels, num_filters = shape
 
-    # reshape to 2D matrix (out_channels, in_channels * kernel_h * kernel_w)
-    flat_shape = (shape[0], int(cp.prod(shape[1:])))
+    # We want each filter to be a row, so flatten each filter to a 1D vector.
+    # Create a 2D matrix of shape (num_filters, filter_size * filter_size * input_channels)
+    flat_shape = (num_filters, filter_height * filter_width * in_channels)
     a = cp.random.randn(*flat_shape)
-    
-    u, _, vh = cp.linalg.svd(a, full_matrices=False)
-    
-    # Choose orthogonal matrix based on shape
-    if flat_shape[0] >= flat_shape[1]:
-        W = u  # orthogonal columns
-    else:
-        W = vh  # orthogonal rows
-    
-    return W.reshape(shape).astype(cp.float32) * gain
 
+    # Compute the SVD of the flattened matrix
+    u, _, vh = cp.linalg.svd(a, full_matrices=False)
+
+    # Select the matrix with the correct shape.
+    # If num_filters >= (filter_height * filter_width * in_channels), then u is (num_filters, num_filters) and we need only the first (filter_height*filter_width*in_channels) columns.
+    # If not, vh is (filter_height*filter_width*in_channels, filter_height*filter_width*in_channels). We'll choose the one with shape flat_shape.
+    if flat_shape[0] >= flat_shape[1]:
+        W_flat = u  # shape: (num_filters, num_filters)
+        # Truncate to the first (filter_height*filter_width*in_channels) columns if needed
+        W_flat = W_flat[:, :flat_shape[1]]
+    else:
+        W_flat = vh  # shape: (filter_height*filter_width*in_channels, filter_height*filter_width*in_channels)
+        # Truncate to the first num_filters rows if needed
+        W_flat = W_flat[:flat_shape[0], :]
+
+    # Now, W_flat has shape (num_filters, filter_height*filter_width*in_channels).
+    # Reshape it back to (num_filters, filter_height, filter_width, in_channels)
+    W = W_flat.reshape((num_filters, filter_height, filter_width, in_channels))
+    # Transpose to get the final shape (filter_height, filter_width, in_channels, num_filters)
+    W = W.transpose(1, 2, 3, 0)
+    return (W.astype(cp.float32) * gain)
+
+
+def create_orthogonal_2d_matrix(shape: tuple, gain: float = 1.0):
+    """
+    Creates a 2D orthogonal matrix for a fully connected (fc) layer.
+
+    Args:
+        shape (tuple): Shape of the weight matrix, e.g. (input_dim, output_dim) or (output_dim, input_dim).
+        gain (float): Scaling factor applied to the orthogonal matrix (e.g., gain = sqrt(2) for ReLU).
+
+    Returns:
+        cp.ndarray: An orthogonal matrix of the specified shape, scaled by gain.
+
+    Explanation:
+        - If shape = (n, m) and n >= m, then the columns of the resulting matrix will be orthonormal,
+          i.e. W.T @ W ≈ I.
+        - If n < m, then the rows will be orthonormal, i.e. W @ W.T ≈ I.
+    """
+    # Create a random matrix of the desired shape
+    A = cp.random.randn(*shape).astype(cp.float32)
+
+    # Compute the SVD of A
+    u, s, vh = cp.linalg.svd(A, full_matrices=False)
+
+    # Depending on the shape, choose u or vh to enforce orthogonality
+    if shape[0] >= shape[1]:
+        # u has shape (n, n); take the first m columns so that W has shape (n, m)
+        W = u[:, :shape[1]]
+    else:
+        # vh has shape (m, m); take the first n rows so that W has shape (n, m)
+        W = vh[:shape[0], :]
+
+    return gain * W

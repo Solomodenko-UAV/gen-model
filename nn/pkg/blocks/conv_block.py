@@ -1,5 +1,7 @@
 import os
 
+from nn.pkg.layers.activation.prelu import PReLU
+
 if os.environ.get("USE_GPU") != False and os.environ.get("USE_GPU") != 'True':
     import numpy as cp
 else:
@@ -15,9 +17,6 @@ conv_stride = 1
 conv_padding = 1
 maxpool_stride = 2
 maxpool_filter_size = 2
-
-activation_func = activations.gelu
-activation_derivative = activations.gelu_derivative
 
 
 class ConvBlock:
@@ -42,6 +41,8 @@ class ConvBlock:
             momentum=momentum
         )
 
+        self.conv1_activation = PReLU(alpha=0.25)
+
         self.conv2 = Convolution(
             input_channels=first_layer_num_of_filters,
             filter_size=conv_filter_size,
@@ -52,6 +53,8 @@ class ConvBlock:
             l2_lambda=l2_lambda,
             momentum=momentum
         )
+
+        self.conv2_activation = PReLU(alpha=0.25)
 
         self.maxpool = MaxPool(
             pool_size=maxpool_filter_size,
@@ -107,12 +110,12 @@ class ConvBlock:
         """
 
         A_conv1 = self.conv1.convolve_forward_vectorized(X)
-        Z_conv1 = activation_func(A_conv1)
+        Z_conv1 = self.conv1_activation.forward(A_conv1)
 
         self.activation_values.append(("conv1_mean", cp.mean(A_conv1), "conv1_median", cp.median(A_conv1)))
 
         A_conv2 = self.conv2.convolve_forward_vectorized(Z_conv1)
-        Z_conv2 = activation_func(A_conv2)
+        Z_conv2 = self.conv2_activation.forward(A_conv2)
 
         self.activation_values.append(("conv2_mean", cp.mean(A_conv1), "conv2_median", cp.median(A_conv1)))
 
@@ -134,9 +137,11 @@ class ConvBlock:
         """
 
         dZ_maxpool = self.maxpool.pool_backward_vectorized(dZ)
-        dZ_conv2 = activation_derivative(dZ_maxpool)
+
+        dZ_conv2 = self.conv2_activation.backward(dZ_maxpool, learning_rate)
         dA_conv2, _ = self.conv2.convolve_backward_vectorized(dZ_conv2, learning_rate)
-        dZ_conv1 = activation_derivative(dA_conv2)
+
+        dZ_conv1 = self.conv1_activation.backward(dA_conv2, learning_rate)
         dA, dW = self.conv1.convolve_backward_vectorized(dZ_conv1, learning_rate)
 
         return dA, dW
@@ -154,14 +159,14 @@ class ConvBlock:
         """
 
         A_conv1 = self.conv1.convolve_forward_vectorized(X)
-        Z_conv1 = activation_func(A_conv1)
+        Z_conv1 = self.conv1_activation.forward(A_conv1)
 
         self.activation_values.append(("conv1_mean", cp.mean(A_conv1), "conv1_median", cp.median(A_conv1)))
 
         Z_maxpool = self.maxpool.pool_forward_vectorized(Z_conv1)
 
         A_conv2 = self.conv2.convolve_forward_vectorized(Z_maxpool)
-        Z_conv2 = activation_func(A_conv2)
+        Z_conv2 = self.conv2_activation.forward(A_conv2)
 
         self.activation_values.append(("conv2_mean", cp.mean(A_conv1), "conv2_median", cp.median(A_conv1)))
 
@@ -180,12 +185,12 @@ class ConvBlock:
             dA(cp.ndarray): gradient of the cost with respect to the input of the convolution block - matrix of shape (m, height, width, num_input_channels), represents a batch of m images
         """
 
-        dZ_conv2 = activation_derivative(dZ)
+        dZ_conv2 = self.conv2_activation.backward(dZ, learning_rate)
         dA_conv2, _ = self.conv2.convolve_backward_vectorized(dZ_conv2, learning_rate)
 
         dA_maxpool = self.maxpool.pool_backward_vectorized(dA_conv2)
 
-        dZ_conv1 = activation_derivative(dA_maxpool)
+        dZ_conv1 = self.conv1_activation.backward(dA_maxpool, learning_rate)
         dA, dW = self.conv1.convolve_backward_vectorized(dZ_conv1, learning_rate)
 
         return dA, dW

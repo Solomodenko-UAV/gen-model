@@ -40,7 +40,7 @@ class YoloOutput:
         self.out_per_cell = C + B * 5
 
         std = cp.sqrt(2.0 / (input_size + out_dim)).astype(cp.float32)  # Xavier for softmax
-        self.weights = helper.create_orthogonal_matrix((input_size, out_dim), std)
+        self.weights = helper.create_orthogonal_2d_matrix((input_size, out_dim), std)
         self.biases = cp.full((1, out_dim), -5.0, dtype=cp.float32)  # sigmoid(-5) ≈ 0.0067
         self.cache = {}
 

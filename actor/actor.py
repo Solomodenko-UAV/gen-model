@@ -1,3 +1,4 @@
+import random
 from nn.pkg.activations.activations import sigmoid
 from nn.pkg.models.tinysimmoYOLO import TinysimmoYOLOModel
 from metadata import visDrone
@@ -33,6 +34,8 @@ class YOLOActorPhoto():
 
     def func_for_tests(self, print_shrunk_image=False, print_orig_image=False, evaluate=False, iou_threshold: float = 0.5, score_threshold: float = 0.5, check=False):
         entries = os.listdir(self.data_folder)
+        random.shuffle(entries)
+
         img_files = {}
         annotation_files = {}
         for entry in entries:
@@ -46,7 +49,7 @@ class YOLOActorPhoto():
 
             for file_name, img_path in img_files.items():
                 img, img_resized = self._prepare_single_image(img_path)
-                _, cooked_resized_annotations, orig_annotations = self.load_data_without_orig_image()
+                _, cooked_resized_annotations, orig_annotations = self.load_data_without_orig_image(entries)
 
                 cooked_orig_annotations = cp.array(self._cook_annotations(orig_annotations[0], img.shape, img.shape))
                 uncooked_orig_annotations = self._uncook_annotations(cooked_orig_annotations, img.shape, img.shape)
@@ -193,7 +196,7 @@ class YOLOActorPhoto():
 
         return np.array(I).astype(np.float32), IR, annotations_list
 
-    def load_data_without_orig_image(self):
+    def load_data_without_orig_image(self, entries=None):
         """
         Load the data from the data folder
 
@@ -202,7 +205,10 @@ class YOLOActorPhoto():
                     Images are of shape np.shape(m, height, width, num_channels) and
                     annotations are of shape cp.shape(m, n, 8)
         """
-        entries = os.listdir(self.data_folder)[self.data_idx:self.data_idx + self.mini_batch_size]
+        if entries is None:
+            entries = os.listdir(self.data_folder)
+
+        entries = entries[self.data_idx:self.data_idx + self.mini_batch_size]
         img_files = {}
         annotation_files = {}
         for entry in entries:
@@ -234,50 +240,55 @@ class YOLOActorPhoto():
 
         return resized_images, resized_annotations_list, orig_annotations_list
 
-    def run_training_loop(self, start_image_idx=0, epochs=10, learning_rate=0.01, print_loss=False):
-        if epochs == -1:
-            epochs = int(np.ceil(len(os.listdir(self.data_folder)) / 10))
-
-        self.data_idx = 0
-
-        if not hasattr(self, "default_bounding_box_offsets"):
-            self._find_out_default_anchors()
-
-        print("Starting training loop")
-        print("number of epochs: ", epochs)
-
-        start_epoch = start_image_idx // self.mini_batch_size
+    def run_training_loop(self, start_image_idx=0, epochs=10, learning_rate=0.01, print_loss=False, num_of_loops=1):
         losses = []
-        for i in range(epochs):
-            resized_images, resized_annotations, _ = self.load_data_without_orig_image()
-            if i < start_epoch:
-                continue
 
-            if resized_images.shape[0] == 0:
-                print("No more data to train on")
-                epochs = i
-                break
+        for i in range(num_of_loops):
+            print(f"Loop {i} from {num_of_loops}")
+            
+            if epochs == -1:
+                epochs = int(np.ceil(len(os.listdir(self.data_folder)) / self.mini_batch_size))
 
-            # normalize image
-            mean = cp.array([0.485, 0.456, 0.406])  # ImageNet mean
-            std = cp.array([0.229, 0.224, 0.225])   # ImageNet std
-            resized_images = (cp.array(resized_images) / 255.0 - mean) / std
+            self.data_idx = 0
 
-            Y = self.model.forward(resized_images, self.default_bounding_box_offsets)
+            if not hasattr(self, "default_bounding_box_offsets"):
+                self._find_out_default_anchors()
 
-            loss = self.train_on_multiple_images(
-                Y=Y,
-                Y_hat=resized_annotations,
-                learning_rate=learning_rate
-            )
+            print("Starting training loop")
+            print("number of epochs: ", epochs)
 
-            losses.append(loss)
+            start_epoch = start_image_idx // self.mini_batch_size
+            for i in range(epochs):
+                resized_images, resized_annotations, _ = self.load_data_without_orig_image()
+                if i < start_epoch:
+                    continue
 
-            if i % (epochs * 0.1) == 0:  # each 10%
+                if resized_images.shape[0] == 0:
+                    print("No more data to train on")
+                    epochs = i
+                    break
+
+                # normalize image
+                mean = cp.array([0.485, 0.456, 0.406])  # ImageNet mean
+                std = cp.array([0.229, 0.224, 0.225])   # ImageNet std
+                resized_images = (cp.array(resized_images) / 255.0 - mean) / std
+
+                Y = self.model.forward(resized_images, self.default_bounding_box_offsets)
+
+                loss = self.train_on_multiple_images(
+                    Y=Y,
+                    Y_hat=resized_annotations,
+                    learning_rate=learning_rate
+                )
+
+                losses.append(loss)
+
+                # if i % (epochs * 0.1) == 0:  # each 10%
+                #     print(f"Epoch {i}, loss: {loss}")
                 print(f"Epoch {i}, loss: {loss}")
 
         if print_loss:
-            plt.plot(range(epochs), losses, label="Loss")
+            plt.plot(range(epochs * num_of_loops), losses, label="Loss")
             plt.xlabel("Epochs")
             plt.ylabel("Loss")
             plt.title("Training Loss Over Epochs")
@@ -288,26 +299,26 @@ class YOLOActorPhoto():
         return losses[-1] if losses else None
 
     def debug(self):
-        img_path = self.data_folder + "/0000001_02999_d_0000005.jpg"
+        # img_path = self.data_folder + "/0000001_02999_d_0000005.jpg"
 
-        self._find_out_default_anchors()
-        img, img_downscaled = self._prepare_single_image(img_path)
-        grid_cell_size = (img_downscaled.shape[0] / self.model.S, img_downscaled.shape[1] / self.model.S)
-        _, ax1 = plt.subplots(1, 1, figsize=(12, 12))  # Ensure figsize is a tuple
-        ax1.imshow(img)
-        for i, anchor in enumerate(self.default_bounding_box_offsets):
-            w = anchor[0] * grid_cell_size[1] * img.shape[1] // img_downscaled.shape[1]
-            h = anchor[1] * grid_cell_size[0] * img.shape[0] // img_downscaled.shape[0]
+        # self._find_out_default_anchors()
+        # img, img_downscaled = self._prepare_single_image(img_path)
+        # grid_cell_size = (img_downscaled.shape[0] / self.model.S, img_downscaled.shape[1] / self.model.S)
+        # _, ax1 = plt.subplots(1, 1, figsize=(12, 12))  # Ensure figsize is a tuple
+        # ax1.imshow(img)
+        # for i, anchor in enumerate(self.default_bounding_box_offsets):
+        #     w = anchor[0] * grid_cell_size[1] * img.shape[1] // img_downscaled.shape[1]
+        #     h = anchor[1] * grid_cell_size[0] * img.shape[0] // img_downscaled.shape[0]
 
-            rect = patches.Rectangle((i * 10, i * 20), w, h, linewidth=1, edgecolor='r', facecolor='none')
-            ax1.add_patch(rect)
+        #     rect = patches.Rectangle((i * 10, i * 20), w, h, linewidth=1, edgecolor='r', facecolor='none')
+        #     ax1.add_patch(rect)
 
-        plt.show()
+        # plt.show()
 
         losses = []
         for i in range(10**1):
             print(i)
-            loss = self.run_training_loop(epochs=-1, learning_rate=1e-4, start_image_idx=0, print_loss=False)
+            loss = self.run_training_loop(epochs=-1, learning_rate=0.0025, start_image_idx=0, print_loss=False)
             losses.append(loss)
 
         norm_weights, activations = self.model.gather_debug_data()
@@ -704,8 +715,6 @@ class YOLOActorPhoto():
             grid_cell_size = (img_downscaled.shape[0] / self.model.S, img_downscaled.shape[1] / self.model.S)
 
             for annotation in annotations_downscaled:
-                # boxes.append([annotation[visDrone.width_idx] / img_downscaled.shape[1] * grid_cell_size[1],
-                #               annotation[visDrone.height_idx] / img_downscaled.shape[0] * grid_cell_size[0]])
                 boxes.append([annotation[visDrone.width_idx] / grid_cell_size[1],
                               annotation[visDrone.height_idx] / grid_cell_size[0]])
 
@@ -826,7 +835,7 @@ def _extract_visDrone_annotations(file_path: str):
     annotations = []
 
     for line in lines:
-        values = list(map(int, line.split(',')))
+        values = list(map(int, ''.join(c for c in line.strip().rstrip(',') if c.isdigit() or c == ',').split(',')))
         annotations.append(values)
 
     return annotations

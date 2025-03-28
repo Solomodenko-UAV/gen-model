@@ -7,8 +7,8 @@ import platform
 
 
 # model = TinysimmoYOLOModel(model_path='model', S=4, B=2, C=1)
-model = TinysimmoYOLOModel(model_path='./model', S=4, B=2, C=11)  # TODO: rollback
-# model = TinysimmoYOLOModel(model_path='./model', S=40, B=5, C=11)  # TODO: rollback
+# model = TinysimmoYOLOModel(model_path='./model', S=4, B=2, C=11)  # TODO: rollback
+model = TinysimmoYOLOModel(model_path='./model', S=40, B=5, C=11)  # TODO: rollback
 
 model.create_new_model(
     image_size=(88, 88),
@@ -24,8 +24,11 @@ if platform.system() == "Windows":
     annotation_folder = "C:\\Projects\\uav\\real_data\\VisDrone2019-DET-test-dev\\annotations"
     # annotation_folder = "C:\\Projects\\uav\\gen-model\\data\\testdata\\annotations"
 elif platform.system() == "Darwin":
+    # data_folder = '/Users/kana/Projects/my_own/pet_projects/VisDrone2019-DET-train/images'
+    # annotation_folder = "/Users/kana/Projects/my_own/pet_projects/VisDrone2019-DET-train/annotations"
     data_folder = '/Users/kana/Projects/my_own/pet_projects/gen-model/data/VisDrone2019-DET-val/testdata/images'
     annotation_folder = "/Users/kana/Projects/my_own/pet_projects/gen-model/data/VisDrone2019-DET-val/testdata/annotations"
+
 else:
     print("Running on an unsupported OS")
 
@@ -42,14 +45,9 @@ actor = YOLOActorPhoto(
 def train():
     start_time = time.time()
     # actor.run_training_loop(epochs=1, learning_rate=0.001)
-    learning_rate = 1e-5
-    for i in range(10**4 * 1):
-        print(i)
-        # if i % 80 == 0:
-        #     learning_rate *= 1.3
-        loss = actor.run_training_loop(epochs=-1, learning_rate=learning_rate, start_image_idx=0, print_loss=False)
-
-    print("final loss:", loss)
+    # learning_rate = 1e-4
+    learning_rate = 0.00001
+    actor.run_training_loop(epochs=-1, learning_rate=learning_rate, start_image_idx=0, print_loss=True, num_of_loops=10**2 * 3)
 
     elapsed_time = time.time() - start_time
     print(f"Training completed in {elapsed_time:.2f} seconds")
@@ -83,7 +81,8 @@ def check():
 
 def test_gradient():
     actor._test_gradient()
-    
+
+
 def debug():
     actor.debug()
 
@@ -92,5 +91,5 @@ def debug():
 # check()
 # test_gradient()
 
-train()
 # debug()
+# train()

@@ -25,7 +25,7 @@ class FullyConnected:
             output_size (int): number of output neurons
         """
         std = cp.sqrt(2 / input_size).astype(cp.float32)  # He init for ReLU
-        self.weights = helper.create_orthogonal_matrix((input_size, output_size), std)
+        self.weights = helper.create_orthogonal_2d_matrix((input_size, output_size), std)
         self.biases = cp.full((1, output_size), 0., dtype=cp.float32)
         self.clip_value = clip_value
         self.l2_lambda = l2_lambda
