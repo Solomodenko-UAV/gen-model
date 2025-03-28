@@ -242,6 +242,9 @@ class YOLOActorPhoto():
     def run_training_loop(self, start_image_idx=0, epochs=10, learning_rate=0.01, print_loss=False, num_of_loops=1):
         losses = []
 
+        if num_of_loops <= 0:
+            num_of_loops = 1
+
         for i in range(num_of_loops):
             print(f"Loop {i} from {num_of_loops}")
 
@@ -540,8 +543,8 @@ class YOLOActorPhoto():
         lambda_noobj = 5.0
 
         # focal loss hyperparameters:
-        alpha_focal = 0.25
         gamma_focal = 5.0
+        alpha_focal = 0.25
 
         m, S, _, _ = A.shape
         B = self.model.B
@@ -563,32 +566,32 @@ class YOLOActorPhoto():
                             pred_conf = pred_bbox[visDrone.object_existence_idx]
 
                             # focal loss
-                            # loss_conf = - (1 - alpha_focal) * (pred_conf ** gamma_focal) * cp.log(1 - pred_conf + 1e-6)
+                            loss_conf = - (1 - alpha_focal) * (pred_conf ** gamma_focal) * cp.log(1 - pred_conf + 1e-6)
+                            loss += lambda_noobj * loss_conf
+
+                            # Compute gradient for no-object case (derivative from loss_conf function).
+                            grad_conf = (1 - alpha_focal) * (
+                                (pred_conf ** gamma_focal) / (1 - pred_conf + 1e-6)
+                                - gamma_focal * (pred_conf ** (gamma_focal - 1)) * cp.log(1 - pred_conf + 1e-6)
+                            )
+
+                            # -------- quality focal loss --------
+
+                            # loss_conf = - ((pred_conf ** gamma_focal) * cp.log(1 - pred_conf + eps))
+                            # # Derivative with respect to p (pred_conf):
+                            # grad_conf = - gamma_focal * (pred_conf ** (gamma_focal - 1)) * cp.log(1 - pred_conf + eps) \
+                            #             - (pred_conf ** gamma_focal) / (1 - pred_conf + eps)
                             # loss += lambda_noobj * loss_conf
 
-                            # # Compute gradient for no-object case (derivative from loss_conf function).
-                            # grad_conf = (1 - alpha_focal) * (
-                            #     (pred_conf ** gamma_focal) / (1 - pred_conf + 1e-6)
-                            #     - gamma_focal * (pred_conf ** (gamma_focal - 1)) * cp.log(1 - pred_conf + 1e-6)
-                            # )
-                            
                             # -------- quality focal loss --------
-                            
-                            loss_conf = - ((pred_conf ** gamma_focal) * cp.log(1 - pred_conf + eps))
-                            # Derivative with respect to p (pred_conf):
-                            grad_conf = - gamma_focal * (pred_conf ** (gamma_focal - 1)) * cp.log(1 - pred_conf + eps) \
-                                        - (pred_conf ** gamma_focal) / (1 - pred_conf + eps)
-                            loss += lambda_noobj * loss_conf
-                            
-                            # -------- quality focal loss --------
-                            
+
                             grad_A[i, row, col, idx + visDrone.object_existence_idx] += lambda_noobj * grad_conf
 
                             continue
 
                         pred_box_coords = pred_bbox[0:4]  # [x, y, w, h]
                         target_box_coords = target_bbox[0:4]  # [x, y, w, h]
-                        
+
                         ciou_val, iou_val = _ciou(pred_box_coords, target_box_coords)
 
                         loss += lambda_coord * (1 - ciou_val)
@@ -596,30 +599,34 @@ class YOLOActorPhoto():
                         grad_ciou = _ciou_gradient(pred_box_coords, target_box_coords)
                         grad_A[i, row, col, idx:idx+4] += lambda_coord * grad_ciou
 
+                       
+                       
                         # confidence loss. Quality focal loss for positives: y=1
-
-                        # loss_conf = - alpha_focal * ((1 - pred_conf) ** gamma_focal) * cp.log(pred_conf + eps)
-                        # loss += loss_conf
-
-                        # grad_conf = alpha_focal * (
-                        #     gamma_focal * ((1 - pred_conf) ** (gamma_focal - 1)) * cp.log(pred_conf + eps)
-                        #     - ((1 - pred_conf) ** gamma_focal) / (pred_conf + eps)
-                        # )
-                        # grad_A[i, row, col, idx + visDrone.object_existence_idx] += grad_conf
-
-                        # -------- quality focal loss --------
                         
-                        # target is not a hard 1 but the quality value (q)
-                        target_conf = iou_val
-                        print("iou_val", iou_val)
+                        # common == focal loss. Advanced == quality focal loss
+                        quality = ciou_val
+                        pred_conf = pred_bbox[visDrone.object_existence_idx]
 
-                        loss_conf = - alpha_focal * (cp.abs(target_conf - pred_conf) ** gamma_focal) * cp.log(pred_conf + eps)
-                        grad_conf = alpha_focal * (
-                            alpha_focal * cp.sign(pred_conf - target_conf) * (cp.abs(target_conf - pred_conf) ** (gamma_focal - 1)) * cp.log(pred_conf + eps)
-                            + (cp.abs(target_conf - pred_conf) ** gamma_focal) / (pred_conf + eps)
+                        loss_common = - cp.log(pred_conf + eps) * ((1 - pred_conf) ** gamma_focal)
+                        loss_advanced = - quality * (cp.abs(quality - pred_conf) ** gamma_focal) * cp.log(pred_conf + eps)
+
+                        loss_conf = (1 - alpha_focal) * loss_common + alpha_focal * loss_advanced
+                        
+                        grad_common = alpha_focal * (
+                            gamma_focal * ((1 - pred_conf) ** (gamma_focal - 1)) * cp.log(pred_conf + eps)
+                            - ((1 - pred_conf) ** gamma_focal) / (pred_conf + eps)
+                        )
+
+                        grad_advanced = alpha_focal * (
+                            alpha_focal * cp.sign(pred_conf - quality) * (cp.abs(quality - pred_conf) ** (gamma_focal - 1)) * cp.log(pred_conf + eps)
+                            + (cp.abs(quality - pred_conf) ** gamma_focal) / (pred_conf + eps)
                         )
                         
-                        # -------- quality focal loss --------
+                        # TODO: as far as I can see, the more weights of common grad, the more confident moodel is about prediction. I suppose it's not totally right
+                        common_weight = (1 - alpha_focal) * 0.5 
+                        advanced_weight = 1 - common_weight
+                        
+                        grad_conf = common_weight * grad_common + advanced_weight * grad_advanced
 
                         loss += loss_conf
                         grad_A[i, row, col, idx + visDrone.object_existence_idx] += grad_conf
@@ -867,6 +874,9 @@ def _extract_visDrone_annotations(file_path: str):
 
     for line in lines:
         values = list(map(int, ''.join(c for c in line.strip().rstrip(',') if c.isdigit() or c == ',').split(',')))
+        if values[visDrone.object_existence_idx] == 0 or values[visDrone.category_idx] > 10:
+            continue
+
         annotations.append(values)
 
     return annotations

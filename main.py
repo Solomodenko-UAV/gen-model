@@ -8,7 +8,7 @@ import platform
 
 # model = TinysimmoYOLOModel(model_path='model', S=4, B=2, C=1)
 model = TinysimmoYOLOModel(model_path='./model', S=4, B=2, C=11)  # TODO: rollback
-# model = TinysimmoYOLOModel(model_path='./model', S=60, B=2, C=11)  # TODO: rollback
+# model = TinysimmoYOLOModel(model_path='./model', S=60, B=5, C=11)  # TODO: rollback
 
 model.create_new_model(
     image_size=(88, 88),
@@ -19,16 +19,15 @@ model.create_new_model(
 )
 
 if platform.system() == "Windows":
-    # data_folder = 'C:\\Projects\\uav\\gen-model\\data\\testdata\\images'
     data_folder = 'C:\\Projects\\uav\\real_data\\VisDrone2019-DET-test-dev\\images'
     annotation_folder = "C:\\Projects\\uav\\real_data\\VisDrone2019-DET-test-dev\\annotations"
-    # annotation_folder = "C:\\Projects\\uav\\gen-model\\data\\testdata\\annotations"
+    # data_folder = 'C:\\Projects\\uav\\real_data\\VisDrone2019-DET-train\\images'
+    # annotation_folder = "C:\\Projects\\uav\\real_data\\VisDrone2019-DET-train\\labels"
 elif platform.system() == "Darwin":
-    # data_folder = '/Users/kana/Projects/my_own/pet_projects/VisDrone2019-DET-train/images'
-    # annotation_folder = "/Users/kana/Projects/my_own/pet_projects/VisDrone2019-DET-train/annotations"
-    data_folder = '/Users/kana/Projects/my_own/pet_projects/gen-model/data/VisDrone2019-DET-val/testdata/images'
-    annotation_folder = "/Users/kana/Projects/my_own/pet_projects/gen-model/data/VisDrone2019-DET-val/testdata/annotations"
-
+    data_folder = '/Users/kana/Projects/my_own/pet_projects/VisDrone2019-DET-train/images'
+    annotation_folder = "/Users/kana/Projects/my_own/pet_projects/VisDrone2019-DET-train/labels"
+    # data_folder = '/Users/kana/Projects/my_own/pet_projects/gen-model/data/VisDrone2019-DET-val/testdata/images_cut'
+    # annotation_folder = "/Users/kana/Projects/my_own/pet_projects/gen-model/data/VisDrone2019-DET-val/testdata/annotations_cut"
 else:
     print("Running on an unsupported OS")
 
@@ -37,8 +36,8 @@ actor = YOLOActorPhoto(
     annotation_folder=annotation_folder,
     model_input_img_res=(88, 88),
     model=model,
-    # mini_batch_size=10
-    mini_batch_size=1
+    mini_batch_size=10
+    # mini_batch_size=1
 )
 
 
@@ -46,8 +45,8 @@ def train():
     start_time = time.time()
     # actor.run_training_loop(epochs=1, learning_rate=0.001)
     # learning_rate = 1e-4
-    learning_rate = 0.00001
-    actor.run_training_loop(epochs=-1, learning_rate=learning_rate, start_image_idx=0, print_loss=True, num_of_loops=10**2 * 1)
+    learning_rate = 0.0001
+    actor.run_training_loop(epochs=-1, learning_rate=learning_rate, start_image_idx=0, print_loss=True, num_of_loops=10**2 * 3)
 
     elapsed_time = time.time() - start_time
     print(f"Training completed in {elapsed_time:.2f} seconds")
