@@ -7,8 +7,8 @@ import platform
 
 
 # model = TinysimmoYOLOModel(model_path='model', S=4, B=2, C=1)
-# model = TinysimmoYOLOModel(model_path='./model', S=4, B=2, C=11)  # TODO: rollback
-model = TinysimmoYOLOModel(model_path='./model', S=40, B=5, C=11)  # TODO: rollback
+model = TinysimmoYOLOModel(model_path='./model', S=4, B=2, C=11)  # TODO: rollback
+# model = TinysimmoYOLOModel(model_path='./model', S=80, B=2, C=11)  # TODO: rollback
 
 model.create_new_model(
     image_size=(88, 88),
@@ -58,7 +58,7 @@ def train():
         print_orig_image=True,
         # evaluate=True,
         iou_threshold=0.,
-        score_threshold=0.,
+        score_threshold=0.1,
     )
 
 
@@ -69,7 +69,7 @@ def test():
         print_orig_image=True,
         # evaluate=True,
         iou_threshold=0.,
-        score_threshold=0.,
+        score_threshold=0.1,
     )
 
 
@@ -92,4 +92,4 @@ def debug():
 # test_gradient()
 
 # debug()
-# train()
+train()

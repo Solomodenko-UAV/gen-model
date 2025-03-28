@@ -88,7 +88,7 @@ class YOLOActorPhoto():
                     rect = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='r', facecolor='none')
                     az.add_patch(rect)
                     label = visDrone.categories.get(c)
-                    # ax.text(x, y - 20, label, color='r', fontsize=10, bbox=dict(facecolor='white', alpha=0.5))
+                    # ax.text(x, y + 5, label, color='r', fontsize=10, bbox=dict(facecolor='white', alpha=0.5))
 
                 ad.set_title("uncooked orig annotations")
                 for i in range(len(uncooked_orig_annotations)):
@@ -96,7 +96,7 @@ class YOLOActorPhoto():
                     rect = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='r', facecolor='none')
                     ad.add_patch(rect)
                     label = visDrone.categories.get(c)
-                    # ax.text(x, y - 20, label, color='r', fontsize=10, bbox=dict(facecolor='white', alpha=0.5))
+                    # ax.text(x, y + 5, label, color='r', fontsize=10, bbox=dict(facecolor='white', alpha=0.5))
 
                 plt.axis('off')
                 plt.show()
@@ -124,7 +124,7 @@ class YOLOActorPhoto():
                             x, y, w, h, obj_class, score = box
                             rect = patches.Rectangle((x, y - h), w, h, linewidth=1, edgecolor='r', facecolor='none')
                             ax1.add_patch(rect)
-                            # ax1.text(x, y - 20, f"{visDrone.categories.get(int(obj_class))} {score:.2f}", color='r', fontsize=10, bbox=dict(facecolor='white', alpha=0.5))
+                            ax1.text(x, y + 5, f"{visDrone.categories.get(int(obj_class))} {score:.2f}", color='r', fontsize=5, bbox=dict(facecolor='white', alpha=0.5))
 
                 if print_orig_image:
                     ax2.imshow(img)
@@ -137,7 +137,7 @@ class YOLOActorPhoto():
                             x, y, w, h, obj_class, score = box
                             rect = patches.Rectangle((x, y - h), w, h, linewidth=1, edgecolor='b', facecolor='none')
                             ax2.add_patch(rect)
-                            # ax2.text(x, y - 20, f"{visDrone.categories.get(int(obj_class))} {score:.2f}", color='b', fontsize=10, bbox=dict(facecolor='white', alpha=0.5))
+                            ax2.text(x, y + 5, f"{visDrone.categories.get(int(obj_class))} {score:.2f}", color='b', fontsize=5, bbox=dict(facecolor='white', alpha=0.5))
 
                 plt.tight_layout()
 
@@ -245,7 +245,7 @@ class YOLOActorPhoto():
 
         for i in range(num_of_loops):
             print(f"Loop {i} from {num_of_loops}")
-            
+
             if epochs == -1:
                 epochs = int(np.ceil(len(os.listdir(self.data_folder)) / self.mini_batch_size))
 
@@ -534,6 +534,11 @@ class YOLOActorPhoto():
 
         # Constant for loss weighting
         lambda_coord = 10.0
+        lambda_noobj = 5.0
+
+        # focal loss hyperparameters:
+        alpha_focal = 0.25
+        gamma_focal = 5.0
 
         m, S, _, _ = A.shape
         B = self.model.B
@@ -550,14 +555,24 @@ class YOLOActorPhoto():
                         pred_bbox = prediction[idx:idx+5]  # [6] array
                         target_bbox = target[idx:idx+5]
 
-                        # if model thinks there is no object in this box
+                        # if there should not be any object
                         if target_bbox[visDrone.object_existence_idx] == 0:
-                            target_conf = target_bbox[visDrone.object_existence_idx]
                             pred_conf = pred_bbox[visDrone.object_existence_idx]
-                            loss += - (target_conf * cp.log(pred_conf) + (1 - target_conf) * cp.log(1 - pred_conf))
-                            grad_A[i, row, col, idx + visDrone.object_existence_idx] += (pred_conf - target_conf)
+
+                            # focal loss
+                            loss_conf = - (1 - alpha_focal) * (pred_conf ** gamma_focal) * cp.log(1 - pred_conf + 1e-6)
+                            loss += lambda_noobj * loss_conf
+
+                            # Compute gradient for no-object case (derivative from loss_conf function).
+                            grad_conf = (1 - alpha_focal) * (
+                                (pred_conf ** gamma_focal) / (1 - pred_conf + 1e-6)
+                                - gamma_focal * (pred_conf ** (gamma_focal - 1)) * cp.log(1 - pred_conf + 1e-6)
+                            )
+                            grad_A[i, row, col, idx + visDrone.object_existence_idx] += lambda_noobj * grad_conf
+
                             continue
 
+                        # coordinates common loss
                         # if model thinks there is an object in this box
                         # localization loss for x, y
                         # calc squared error
@@ -572,7 +587,6 @@ class YOLOActorPhoto():
                         anchor_w, anchor_h = self.default_bounding_box_offsets[best_anchor_idx]
 
                         # calc target adjustments (ground truth relative to anchor):
-
                         target_tw = cp.log(target_bbox[visDrone.width_idx] / anchor_w + 1e-6)
                         target_th = cp.log(target_bbox[visDrone.height_idx] / anchor_h + 1e-6)
 
@@ -587,11 +601,30 @@ class YOLOActorPhoto():
                         grad_A[i, row, col, idx + visDrone.width_idx] += 2 * lambda_coord * diff_w
                         grad_A[i, row, col, idx + visDrone.height_idx] += 2 * lambda_coord * diff_h
 
-                        # confidence loss
-                        target_conf = target_bbox[visDrone.object_existence_idx]
-                        pred_conf = pred_bbox[visDrone.object_existence_idx]
-                        loss += - (target_conf * cp.log(pred_conf) + (1 - target_conf) * cp.log(1 - pred_conf))
-                        grad_A[i, row, col, idx + visDrone.object_existence_idx] += (pred_conf - target_conf)
+                        # --- coordinates loss with ciou ---
+
+                        # pred_box_coords = pred_bbox[0:4] # [x, y, w, h]
+                        # target_box_coords = target_bbox[0:4] # [x, y, w, h]
+
+                        # ciou_val = _ciou(pred_box_coords, target_box_coords)
+
+                        # loss += lambda_coord * (1 - ciou_val)
+
+                        # grad_ciou = _ciou_gradient(pred_box_coords, target_box_coords)
+                        # grad_A[i, row, col, idx:idx+4] += lambda_coord * grad_ciou
+
+                        # --- coordinates loss with ciou ---
+
+                        # confidence loss. Focal loss for positives: y=1
+                        loss_conf = - alpha_focal * ((1 - pred_conf) ** gamma_focal) * cp.log(pred_conf + 1e-6)
+                        loss += loss_conf
+
+                        # focal loss
+                        grad_conf = alpha_focal * (
+                            gamma_focal * ((1 - pred_conf) ** (gamma_focal - 1)) * cp.log(pred_conf + 1e-6)
+                            - ((1 - pred_conf) ** gamma_focal) / (pred_conf + 1e-6)
+                        )
+                        grad_A[i, row, col, idx + visDrone.object_existence_idx] += grad_conf
 
                         # classification loss
                         pred_class = prediction[B * 5:]  # [C] array
@@ -916,6 +949,100 @@ def _compute_iou(boxA: np.ndarray, boxB: np.ndarray):
     boxB_area = (boxB[2] - boxB[0]) * (boxB[3] - boxB[1])
 
     return inner_area / (boxA_area + boxB_area - inner_area)
+
+
+def _ciou(box1: cp.ndarray, box2: cp.ndarray, eps: float = 1e-7):
+    """
+    Compute the Complete IoU (CIoU) between a predicted box and a ground truth box.
+
+    Args:
+        pred_box (cp.ndarray): Array of shape (4,) representing [x, y, w, h] for the predicted box.
+        gt_box (cp.ndarray): Array of shape (4,) representing [x, y, w, h] for the ground truth box.
+        eps (float): A small value to avoid division by zero.
+
+    Returns:
+        cp.ndarray: The CIoU value.
+    """
+    x_idx = 0
+    y_idx = 1
+    w_idx = 2
+    h_idx = 3
+
+    # Convert center coordinates to (x1, y1, x2, y2)
+    box1_x1 = box1[x_idx] - box1[w_idx] / 2
+    box1_y1 = box1[y_idx] - box1[h_idx] / 2
+    box1_x2 = box1[x_idx] + box1[w_idx] / 2
+    box1_y2 = box1[y_idx] + box1[h_idx] / 2
+
+    box2_x1 = box2[x_idx] - box2[w_idx] / 2
+    box2_y1 = box2[y_idx] - box2[h_idx] / 2
+    box2_x2 = box2[x_idx] + box2[w_idx] / 2
+    box2_y2 = box2[y_idx] + box2[h_idx] / 2
+
+    # Intersection rectangle
+    inter_x1 = cp.maximum(box1_x1, box2_x1)
+    inter_y1 = cp.maximum(box1_y1, box2_y1)
+    inter_x2 = cp.minimum(box1_x2, box2_x2)
+    inter_y2 = cp.minimum(box1_y2, box2_y2)
+
+    inter_w = cp.maximum(inter_x2 - inter_x1, 0)
+    inter_h = cp.maximum(inter_y2 - inter_y1, 0)
+    inter_area = inter_w * inter_h
+
+    # Areas of boxes
+    area_pred = box1[w_idx] * box1[h_idx]
+    area_gt = box2[w_idx] * box2[h_idx]
+    union_area = area_pred + area_gt - inter_area + eps
+
+    iou = inter_area / union_area
+
+    # Compute the squared distance between the centers
+    center_distance = (box1[x_idx] - box2[x_idx]) ** 2 + (box1[y_idx] - box2[y_idx]) ** 2
+
+    # Compute the diagonal length squared of the smallest enclosing box
+    enclose_x1 = cp.minimum(box1_x1, box2_x1)
+    enclose_y1 = cp.minimum(box1_y1, box2_y1)
+    enclose_x2 = cp.maximum(box1_x2, box2_x2)
+    enclose_y2 = cp.maximum(box1_y2, box2_y2)
+    enclose_diagonal = (enclose_x2 - enclose_x1) ** 2 + (enclose_y2 - enclose_y1) ** 2 + eps
+
+    # Aspect ratio consistency term
+    # v measures the similarity of the aspect ratios
+    v = (4 / (cp.pi ** 2)) * (cp.arctan(box2[w_idx] / (box2[h_idx] + eps)) - cp.arctan(box1[w_idx] / (box1[h_idx] + eps))) ** 2
+    alpha = v / (1 - iou + v + eps)
+
+    ciou = iou - (center_distance / enclose_diagonal + alpha * v)
+
+    return ciou
+
+
+def _ciou_gradient(pred_box: cp.ndarray, gt_box: cp.ndarray, eps: float = 1e-6) -> cp.ndarray:
+    """
+    Approximates the gradient of the CIoU
+
+    Args:
+        pred_box (cp.ndarray): Predicted box [x, y, w, h]
+        gt_box (cp.ndarray): Ground truth box [x, y, w, h]
+        eps (float): epsilon
+
+    Returns:
+        cp.ndarray: gradient of the CIoU with respect to the predicted box
+    """
+    grad = cp.zeros_like(pred_box)
+
+    # For loss L = 1 - CIoU, the gradient is -d(CIoU)/d(pred_box).
+    for i in range(len(pred_box)):
+        delta = cp.zeros_like(pred_box)
+        delta[i] = eps
+
+        ciou_plus = _ciou(pred_box + delta, gt_box)
+        ciou_minus = _ciou(pred_box - delta, gt_box)
+
+        # Central difference approximation
+        dciou_dp = (ciou_plus - ciou_minus) / (2 * eps)
+        grad[i] = -dciou_dp  # negative sign because L = 1 - CIoU
+
+    return grad
 
 
 def _calc_precision_recall(true_boxes: list, pred_boxes: np.ndarray, iou_threshold: float = 0.5):
