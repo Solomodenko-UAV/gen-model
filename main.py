@@ -8,7 +8,7 @@ import platform
 
 # model = TinysimmoYOLOModel(model_path='model', S=4, B=2, C=1)
 model = TinysimmoYOLOModel(model_path='./model', S=4, B=2, C=11)  # TODO: rollback
-# model = TinysimmoYOLOModel(model_path='./model', S=80, B=2, C=11)  # TODO: rollback
+# model = TinysimmoYOLOModel(model_path='./model', S=60, B=2, C=11)  # TODO: rollback
 
 model.create_new_model(
     image_size=(88, 88),
@@ -47,7 +47,7 @@ def train():
     # actor.run_training_loop(epochs=1, learning_rate=0.001)
     # learning_rate = 1e-4
     learning_rate = 0.00001
-    actor.run_training_loop(epochs=-1, learning_rate=learning_rate, start_image_idx=0, print_loss=True, num_of_loops=10**2 * 3)
+    actor.run_training_loop(epochs=-1, learning_rate=learning_rate, start_image_idx=0, print_loss=True, num_of_loops=10**2 * 1)
 
     elapsed_time = time.time() - start_time
     print(f"Training completed in {elapsed_time:.2f} seconds")
@@ -58,7 +58,7 @@ def train():
         print_orig_image=True,
         # evaluate=True,
         iou_threshold=0.,
-        score_threshold=0.1,
+        score_threshold=0.,
     )
 
 

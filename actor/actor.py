@@ -122,7 +122,7 @@ class YOLOActorPhoto():
                         boxes_per_image = boxes_data[i]
                         for box in boxes_per_image:
                             x, y, w, h, obj_class, score = box
-                            rect = patches.Rectangle((x, y - h), w, h, linewidth=1, edgecolor='r', facecolor='none')
+                            rect = patches.Rectangle((x, y + h), w, h, linewidth=1, edgecolor='r', facecolor='none')
                             ax1.add_patch(rect)
                             ax1.text(x, y + 5, f"{visDrone.categories.get(int(obj_class))} {score:.2f}", color='r', fontsize=5, bbox=dict(facecolor='white', alpha=0.5))
 
@@ -135,7 +135,7 @@ class YOLOActorPhoto():
                         boxes_per_image = boxes_data[i]
                         for box in boxes_per_image:
                             x, y, w, h, obj_class, score = box
-                            rect = patches.Rectangle((x, y - h), w, h, linewidth=1, edgecolor='b', facecolor='none')
+                            rect = patches.Rectangle((x, y + h), w, h, linewidth=1, edgecolor='b', facecolor='none')
                             ax2.add_patch(rect)
                             ax2.text(x, y + 5, f"{visDrone.categories.get(int(obj_class))} {score:.2f}", color='b', fontsize=5, bbox=dict(facecolor='white', alpha=0.5))
 
@@ -229,7 +229,6 @@ class YOLOActorPhoto():
             resized_images[i] = img_resized
 
             annotations_list = np.array(annotations_list).astype(np.float32)
-            annotations_list[:, visDrone.category_idx] -= 1  # categories are 1-indexed, but we need 0-indexed
 
             orig_annotations_list[i] = np.array(annotations_list).astype(np.float32)
             resized_annotations_list[i] = cp.array(self._cook_annotations(orig_annotations_list[i], (img.shape[0], img.shape[1]), self.model_input_img_res))
@@ -414,7 +413,9 @@ class YOLOActorPhoto():
         # create one-hot encoding vector for the class
         class_targets = np.zeros((m, self.model.C))
         categories = Y_norm[:, visDrone.category_idx].astype(np.int8)
-        class_targets[:, categories] = 1
+        class_targets[np.arange(m), categories] = 1
+        # smooth one-hot encoding vector
+        class_targets = (1 - 1e-6) * class_targets + 1e-6 / self.model.C
 
         # construct output matrix - aka reshape annotations to the model output shape
         Y_target = np.zeros((self.model.S, self.model.S, self.model.B * 5 + self.model.C)).astype(np.float32)
@@ -532,6 +533,8 @@ class YOLOActorPhoto():
         loss = 0.0
         grad_A = cp.zeros_like(A)
 
+        eps = 1e-6
+
         # Constant for loss weighting
         lambda_coord = 10.0
         lambda_noobj = 5.0
@@ -560,44 +563,71 @@ class YOLOActorPhoto():
                             pred_conf = pred_bbox[visDrone.object_existence_idx]
 
                             # focal loss
-                            loss_conf = - (1 - alpha_focal) * (pred_conf ** gamma_focal) * cp.log(1 - pred_conf + 1e-6)
-                            loss += lambda_noobj * loss_conf
+                            # loss_conf = - (1 - alpha_focal) * (pred_conf ** gamma_focal) * cp.log(1 - pred_conf + 1e-6)
+                            # loss += lambda_noobj * loss_conf
 
-                            # Compute gradient for no-object case (derivative from loss_conf function).
-                            grad_conf = (1 - alpha_focal) * (
-                                (pred_conf ** gamma_focal) / (1 - pred_conf + 1e-6)
-                                - gamma_focal * (pred_conf ** (gamma_focal - 1)) * cp.log(1 - pred_conf + 1e-6)
-                            )
+                            # # Compute gradient for no-object case (derivative from loss_conf function).
+                            # grad_conf = (1 - alpha_focal) * (
+                            #     (pred_conf ** gamma_focal) / (1 - pred_conf + 1e-6)
+                            #     - gamma_focal * (pred_conf ** (gamma_focal - 1)) * cp.log(1 - pred_conf + 1e-6)
+                            # )
+                            
+                            # -------- quality focal loss --------
+                            
+                            loss_conf = - ((pred_conf ** gamma_focal) * cp.log(1 - pred_conf + eps))
+                            # Derivative with respect to p (pred_conf):
+                            grad_conf = - gamma_focal * (pred_conf ** (gamma_focal - 1)) * cp.log(1 - pred_conf + eps) \
+                                        - (pred_conf ** gamma_focal) / (1 - pred_conf + eps)
+                            loss += lambda_noobj * loss_conf
+                            
+                            # -------- quality focal loss --------
+                            
                             grad_A[i, row, col, idx + visDrone.object_existence_idx] += lambda_noobj * grad_conf
 
                             continue
 
-
-                        pred_box_coords = pred_bbox[0:4] # [x, y, w, h]
-                        target_box_coords = target_bbox[0:4] # [x, y, w, h]
-
-                        ciou_val = _ciou(pred_box_coords, target_box_coords)
+                        pred_box_coords = pred_bbox[0:4]  # [x, y, w, h]
+                        target_box_coords = target_bbox[0:4]  # [x, y, w, h]
+                        
+                        ciou_val, iou_val = _ciou(pred_box_coords, target_box_coords)
 
                         loss += lambda_coord * (1 - ciou_val)
 
                         grad_ciou = _ciou_gradient(pred_box_coords, target_box_coords)
                         grad_A[i, row, col, idx:idx+4] += lambda_coord * grad_ciou
 
-                        # confidence loss. Focal loss for positives: y=1
-                        loss_conf = - alpha_focal * ((1 - pred_conf) ** gamma_focal) * cp.log(pred_conf + 1e-6)
-                        loss += loss_conf
+                        # confidence loss. Quality focal loss for positives: y=1
 
-                        # focal loss
+                        # loss_conf = - alpha_focal * ((1 - pred_conf) ** gamma_focal) * cp.log(pred_conf + eps)
+                        # loss += loss_conf
+
+                        # grad_conf = alpha_focal * (
+                        #     gamma_focal * ((1 - pred_conf) ** (gamma_focal - 1)) * cp.log(pred_conf + eps)
+                        #     - ((1 - pred_conf) ** gamma_focal) / (pred_conf + eps)
+                        # )
+                        # grad_A[i, row, col, idx + visDrone.object_existence_idx] += grad_conf
+
+                        # -------- quality focal loss --------
+                        
+                        # target is not a hard 1 but the quality value (q)
+                        target_conf = iou_val
+                        print("iou_val", iou_val)
+
+                        loss_conf = - alpha_focal * (cp.abs(target_conf - pred_conf) ** gamma_focal) * cp.log(pred_conf + eps)
                         grad_conf = alpha_focal * (
-                            gamma_focal * ((1 - pred_conf) ** (gamma_focal - 1)) * cp.log(pred_conf + 1e-6)
-                            - ((1 - pred_conf) ** gamma_focal) / (pred_conf + 1e-6)
+                            alpha_focal * cp.sign(pred_conf - target_conf) * (cp.abs(target_conf - pred_conf) ** (gamma_focal - 1)) * cp.log(pred_conf + eps)
+                            + (cp.abs(target_conf - pred_conf) ** gamma_focal) / (pred_conf + eps)
                         )
+                        
+                        # -------- quality focal loss --------
+
+                        loss += loss_conf
                         grad_A[i, row, col, idx + visDrone.object_existence_idx] += grad_conf
 
                         # classification loss
                         pred_class = prediction[B * 5:]  # [C] array
                         target_class = target[B * 5:]  # [C] array
-                        loss += -cp.sum(target_class * cp.log(pred_class + 1e-6))
+                        loss += -cp.sum(target_class * cp.log(pred_class + eps))
                         grad_class = pred_class - target_class  # Derivative of cross-entropy with softmax
                         grad_A[i, row, col, B * 5:] += grad_class
 
@@ -981,7 +1011,7 @@ def _ciou(box1: cp.ndarray, box2: cp.ndarray, eps: float = 1e-7):
 
     ciou = iou - (center_distance / enclose_diagonal + alpha * v)
 
-    return ciou
+    return ciou, iou
 
 
 def _ciou_gradient(pred_box: cp.ndarray, gt_box: cp.ndarray, eps: float = 1e-6) -> cp.ndarray:
@@ -1003,8 +1033,8 @@ def _ciou_gradient(pred_box: cp.ndarray, gt_box: cp.ndarray, eps: float = 1e-6) 
         delta = cp.zeros_like(pred_box)
         delta[i] = eps
 
-        ciou_plus = _ciou(pred_box + delta, gt_box)
-        ciou_minus = _ciou(pred_box - delta, gt_box)
+        ciou_plus, _ = _ciou(pred_box + delta, gt_box)
+        ciou_minus, _ = _ciou(pred_box - delta, gt_box)
 
         # Central difference approximation
         dciou_dp = (ciou_plus - ciou_minus) / (2 * eps)
