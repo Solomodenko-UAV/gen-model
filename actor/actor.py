@@ -530,7 +530,7 @@ class YOLOActorPhoto():
             grad_A(np.ndarray): gradient of the loss with respect to A - matrix of shape (m, S, S, B*5+C)
         """
         loss = 0.0
-        grad_A = np.zeros_like(A)
+        grad_A = cp.zeros_like(A)
 
         # Constant for loss weighting
         lambda_coord = 10.0
@@ -572,48 +572,16 @@ class YOLOActorPhoto():
 
                             continue
 
-                        # coordinates common loss
-                        # if model thinks there is an object in this box
-                        # localization loss for x, y
-                        # calc squared error
-                        for j in range(visDrone.top_left_y_idx + 1):
-                            diff = pred_bbox[j] - target_bbox[j]
-                            loss += lambda_coord * (diff ** 2)
-                            grad_A[i, row, col, idx + j] += 2 * lambda_coord * diff
 
-                        # ious = helper.compute_iou_for_anchors(pred_bbox[visDrone.width_idx:visDrone.height_idx + 1], self.default_bounding_box_offsets)
-                        # best_anchor_idx = cp.argmax(ious)
-                        best_anchor_idx = b
-                        anchor_w, anchor_h = self.default_bounding_box_offsets[best_anchor_idx]
+                        pred_box_coords = pred_bbox[0:4] # [x, y, w, h]
+                        target_box_coords = target_bbox[0:4] # [x, y, w, h]
 
-                        # calc target adjustments (ground truth relative to anchor):
-                        target_tw = cp.log(target_bbox[visDrone.width_idx] / anchor_w + 1e-6)
-                        target_th = cp.log(target_bbox[visDrone.height_idx] / anchor_h + 1e-6)
+                        ciou_val = _ciou(pred_box_coords, target_box_coords)
 
-                        # calc predicted adjustments
-                        pred_tw = cp.log(pred_bbox[visDrone.width_idx] / anchor_w + 1e-6)
-                        pred_th = cp.log(pred_bbox[visDrone.height_idx] / anchor_h + 1e-6)
+                        loss += lambda_coord * (1 - ciou_val)
 
-                        diff_w = pred_tw - target_tw
-                        diff_h = pred_th - target_th
-
-                        loss += lambda_coord * (diff_w**2 + diff_h**2)
-                        grad_A[i, row, col, idx + visDrone.width_idx] += 2 * lambda_coord * diff_w
-                        grad_A[i, row, col, idx + visDrone.height_idx] += 2 * lambda_coord * diff_h
-
-                        # --- coordinates loss with ciou ---
-
-                        # pred_box_coords = pred_bbox[0:4] # [x, y, w, h]
-                        # target_box_coords = target_bbox[0:4] # [x, y, w, h]
-
-                        # ciou_val = _ciou(pred_box_coords, target_box_coords)
-
-                        # loss += lambda_coord * (1 - ciou_val)
-
-                        # grad_ciou = _ciou_gradient(pred_box_coords, target_box_coords)
-                        # grad_A[i, row, col, idx:idx+4] += lambda_coord * grad_ciou
-
-                        # --- coordinates loss with ciou ---
+                        grad_ciou = _ciou_gradient(pred_box_coords, target_box_coords)
+                        grad_A[i, row, col, idx:idx+4] += lambda_coord * grad_ciou
 
                         # confidence loss. Focal loss for positives: y=1
                         loss_conf = - alpha_focal * ((1 - pred_conf) ** gamma_focal) * cp.log(pred_conf + 1e-6)
