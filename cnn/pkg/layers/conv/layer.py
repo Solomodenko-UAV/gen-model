@@ -176,19 +176,19 @@ class Convolution:
 
         X = self.cache[0]
         _, _, _, input_channels = X.shape
-        filter_height, filter_width, _, output_filters = self.filters.shape
+        filter_height, filter_width, _, num_filters = self.filters.shape
 
         dZ, dgamma, dbeta = self._normalize_backward(dZ)
 
-        X_cols = _im2col(X, filter_height, filter_width, self.padding, self.stride)  # shape: (filter_height*filter_width*C_in, N*out_height*out_width)
+        X_cols = im2col(X, filter_height, filter_width, self.padding, self.stride)  # shape: (filter_height*filter_width*input_channels, m*out_height*out_width)
 
-        dZ_reshaped = dZ.transpose(0, 3, 1, 2).reshape(output_filters, -1)  # (C_out, N*out_height*out_width)
-        dW_cols = cp.dot(X_cols, dZ_reshaped.T)  # (filter_height*filter_width*C_in, C_out)
-        dW = dW_cols.reshape(filter_height, filter_width, input_channels, output_filters)
+        dZ_reshaped = dZ.transpose(0, 3, 1, 2).reshape(num_filters, -1)  # (num_filters, m*out_height*out_width)
+        dW_cols = cp.dot(X_cols, dZ_reshaped.T)  # (filter_height*filter_width*input_channels, num_filters)
+        dW = dW_cols.reshape(filter_height, filter_width, input_channels, num_filters)
 
-        filters_reshaped = self.filters.reshape(-1, output_filters)  # (filter_height*filter_width*C_in, C_out)
-        dX_cols = cp.dot(filters_reshaped, dZ_reshaped)  # (filter_height*filter_width*C_in, N*out_height*out_width)
-        dX = _col2im(dX_cols, X.shape, filter_height, filter_width, self.padding, self.stride)
+        filters_reshaped = self.filters.reshape(-1, num_filters)  # (filter_height*filter_width*input_channels, num_filters)
+        dX_cols = cp.dot(filters_reshaped, dZ_reshaped)  # (filter_height*filter_width*input_channels, m*out_height*out_width)
+        dX = col2im(dX_cols, X.shape, filter_height, filter_width, self.padding, self.stride)
 
         db = cp.sum(dZ, axis=(0, 1, 2), keepdims=True)
 
@@ -222,7 +222,7 @@ class Convolution:
         # self.cache_beta = helper.rmsprop_update(self.beta, dbeta, self.cache_beta,
         #                                         decay_rate=self.decay_rate, learning_rate=learning_rate, eps=self.eps)
 
-        self.weight_norms.append(cp.linalg.norm(self.filters))
+        # self.weight_norms.append(cp.linalg.norm(self.filters)) # TODO: uncomment if necessary
 
         return dX, dW
 
@@ -316,7 +316,7 @@ class Convolution:
         self.running_variance = cp.array(params[f'{key}_running_variance'])
 
 
-def _im2col(X, filter_height, filter_width, padding, stride):
+def im2col(X, filter_height, filter_width, padding, stride):
     """
     convert batch of images into the single matrix
 
@@ -369,7 +369,7 @@ def _im2col(X, filter_height, filter_width, padding, stride):
     return cols
 
 
-def _col2im(cols, X_shape, filter_height, filter_width, padding, stride):
+def col2im(cols, X_shape, filter_height, filter_width, padding, stride):
     """
     Inverse of im2col. Reconstructs the image from column representation.
     Args:

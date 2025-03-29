@@ -1,6 +1,14 @@
 import os 
 
-is_cpu = os.environ.get('CPU_ONLY', '0') == '1'
-if is_cpu:
-    os.environ["CUDA_VISIBLE_DEVICES"] = "-1"  # Disable GPU usage
+
+on_cpu = os.environ.get("USE_GPU") != False and os.environ.get("USE_GPU") != 'True'
+
+if on_cpu:
+    import numpy as cp
+else:
+    import cupy as cp
     
+
+class FPN:
+    def __init__(self):
+        
