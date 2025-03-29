@@ -1,7 +1,7 @@
 import unittest
 import numpy as np
 
-from nn.pkg.layers.yolo_output.layer import YoloOutput
+from cnn.pkg.layers.yolo_output.layer import YoloOutput
 
 class TestYoloOutputLayer(unittest.TestCase):
     

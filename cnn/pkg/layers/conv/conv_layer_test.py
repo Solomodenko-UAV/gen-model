@@ -1,7 +1,7 @@
 import unittest
 import numpy as np
 
-from nn.pkg.layers.conv.layer import Convolution
+from cnn.pkg.layers.conv.layer import Convolution
 
 
 class TestConvLayer(unittest.TestCase):

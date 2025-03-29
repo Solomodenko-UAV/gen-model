@@ -1,7 +1,7 @@
 import unittest
 import numpy as np
 
-from nn.pkg.layers.maxpool.layer import MaxPool
+from cnn.pkg.layers.maxpool.layer import MaxPool
 
 
 class TestMaxPoolLayer(unittest.TestCase):

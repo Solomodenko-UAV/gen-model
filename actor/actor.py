@@ -1,6 +1,6 @@
 import random
-from nn.pkg.activations.activations import sigmoid
-from nn.pkg.models.tinysimmoYOLO import TinysimmoYOLOModel
+from cnn.pkg.activations.activations import sigmoid
+from cnn.pkg.models.tinysimmoYOLO import TinysimmoYOLOModel
 from metadata import visDrone
 import matplotlib.patches as patches
 import matplotlib.pyplot as plt

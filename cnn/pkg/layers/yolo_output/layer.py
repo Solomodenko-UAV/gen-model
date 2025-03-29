@@ -1,5 +1,5 @@
 from helper import helper
-from nn.pkg.activations import activations
+from cnn.pkg.activations import activations
 import os
 import helper.helper as helper
 

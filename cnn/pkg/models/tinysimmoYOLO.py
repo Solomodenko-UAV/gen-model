@@ -1,7 +1,7 @@
 
-from nn.pkg.layers.yolo_output.layer import YoloOutput
-from nn.pkg.layers.fc.layer import FullyConnected
-from nn.pkg.blocks.conv_block import ConvBlock
+from cnn.pkg.layers.yolo_output.layer import YoloOutput
+from cnn.pkg.layers.fc.layer import FullyConnected
+from cnn.pkg.blocks.conv_block import ConvBlock
 import numpy as np
 import os
 

@@ -1,8 +1,7 @@
 import time
 
-import numpy as np
 from actor.actor import YOLOActorPhoto
-from nn.pkg.models.tinysimmoYOLO import TinysimmoYOLOModel
+from cnn.pkg.models.tinysimmoYOLO import TinysimmoYOLOModel
 import platform
 
 

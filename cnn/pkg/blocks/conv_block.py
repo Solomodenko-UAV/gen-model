@@ -1,15 +1,15 @@
 import os
 
-from nn.pkg.layers.activation.prelu import PReLU
+from cnn.pkg.layers.activation.prelu import PReLU
 
 if os.environ.get("USE_GPU") != False and os.environ.get("USE_GPU") != 'True':
     import numpy as cp
 else:
     import cupy as cp
 
-from nn.pkg.activations import activations
-from nn.pkg.layers.conv.layer import Convolution
-from nn.pkg.layers.maxpool.layer import MaxPool
+from cnn.pkg.activations import activations
+from cnn.pkg.layers.conv.layer import Convolution
+from cnn.pkg.layers.maxpool.layer import MaxPool
 import helper.helper as helper
 
 conv_filter_size = 3
