@@ -45,7 +45,7 @@ def train():
     # actor.run_training_loop(epochs=1, learning_rate=0.001)
     # learning_rate = 1e-4
     learning_rate = 0.0001
-    actor.run_training_loop(epochs=-1, learning_rate=learning_rate, start_image_idx=0, print_loss=True, num_of_loops=10**2 * 3)
+    actor.run_training_loop(epochs=-1, learning_rate=learning_rate, start_image_idx=0, print_loss=True, num_of_loops=10**2 * 1)
 
     elapsed_time = time.time() - start_time
     print(f"Training completed in {elapsed_time:.2f} seconds")

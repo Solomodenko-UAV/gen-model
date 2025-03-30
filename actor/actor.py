@@ -676,11 +676,11 @@ class YOLOActorPhoto():
                         confidence = model_output[i, row, col, b * 5 + 4]
 
                         # constrain offsets to [0, 1] within the grid cell
-                        x = sigmoid(tx)
-                        y = sigmoid(ty)
+                        # x = sigmoid(tx)
+                        # y = sigmoid(ty)
 
-                        x_center_abs = (col + x) * cell_width
-                        y_center_abs = (row + y) * cell_height
+                        x_center_abs = (col + tx) * cell_width
+                        y_center_abs = (row + ty) * cell_height
 
                         # already scaled by anchor in feed_forward
                         w_abs = tw * cell_width

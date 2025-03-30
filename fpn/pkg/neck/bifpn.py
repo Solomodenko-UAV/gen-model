@@ -41,8 +41,13 @@ class BiFPN:
         self.weights2_high = cp.array([1.0], dtype=cp.float32)
         self.weights2_low = cp.array([1.0], dtype=cp.float32)
 
+        # merge weights
+        self.weights3_high = cp.array([1.0], dtype=cp.float32)
+        self.weights3_low = cp.array([1.0], dtype=cp.float32)
+
         # AdaDelta hyperparameters
         self.rho = 0.95
+
         self.E_g_weights1_high = cp.zeros_like(self.weights1_high)
         self.E_delta_weights1_high = cp.zeros_like(self.weights1_high)
         self.E_g_weights1_low = cp.zeros_like(self.weights1_low)
@@ -53,6 +58,11 @@ class BiFPN:
         self.E_g_weights2_low = cp.zeros_like(self.weights2_low)
         self.E_delta_weights2_low = cp.zeros_like(self.weights2_low)
 
+        self.E_g_weights3_high = cp.zeros_like(self.weights3_high)
+        self.E_delta_weights3_high = cp.zeros_like(self.weights3_high)
+        self.E_g_weights3_low = cp.zeros_like(self.weights3_low)
+        self.E_delta_weights3_low = cp.zeros_like(self.weights3_low)
+
     def forward(self, X: cp.ndarray):
         """
         Forward pass of the BiFPN module
@@ -62,7 +72,7 @@ class BiFPN:
 
 
         Returns:
-            tuple: high resolution and low resolution feature maps with shape (m, height, width, out_channels)            
+            merged: (cp.ndarray): merged low and high features (m, height, width, out_channels)            
         """
 
         # separate backbone output into high and low resolution features
@@ -82,55 +92,90 @@ class BiFPN:
         fused_low = self._fuse_features_forward(X_low, X_high_downsampled, "weights2")  # (m, height/2, width/2, out_channels)
         X_low_fused = self.antialias_bottom.convolve_forward(fused_low)
 
-        self.cache = {'X_high': X_high, 'X_low': X_low, 'X_low_upsampled': X_low_upsampled, 'X_high_downsampled': X_high_downsampled}
-        return X_high_fused, X_low_fused
+        X_low_fused = self._upsample(X_low_fused)  # (m, height, width, out_channels)
+        merged = self._fuse_features_forward(X_high_fused, X_low_fused, "weights3")  # (m, height, width, out_channels)
 
-    def backward(self, dX_high_fused, dX_low_fused: cp.ndarray):
+        self.cache = {
+            'X_high': X_high,
+            'X_low': X_low,
+            'X_low_upsampled': X_low_upsampled,
+            'X_high_downsampled': X_high_downsampled,
+            'X_high_fused': X_high_fused,
+            'X_low_fused': X_low_fused,
+        }
+
+        return merged
+
+    def backward(self, dZ: cp.ndarray):
         """
         Backward pass of the BiFPN module
 
         Args:
-            dX_high_fused (cp.ndarray): gradient of the loss with respect to the high resolution feature map
-            dX_low_fused (cp.ndarray): gradient of the loss with respect to the low resolution feature map
+            dZ (cp.ndarray): gradient of the loss with respect to the output of the BiFPN module - matrix of shape (m, height, width, out_channels), represents a batch of m images
+
+        Returns:
+            dX (cp.ndarray): gradient of the loss with respect to the input of the BiFPN module - matrix of shape (m, height, width, in_channels), represents a batch of m images
         """
 
-        # backprop bottom-up fusion
+        # Unpack cached tensors
+        X_high = self.cache['X_high']
+        X_low = self.cache['X_low']
+        X_low_upsampled = self.cache['X_low_upsampled']
+        X_high_downsampled = self.cache['X_high_downsampled']
+        X_high_fused = self.cache['X_high_fused']
+        X_low_fused = self.cache['X_low_fused']
+
+        # Final feature fusion backprop
+        dX_high_fused, dX_low_upsampled_merge, dW3_high, dW3_low = self._fuse_features_backward(
+            dZ, X_high_fused, X_low_fused, self.weights3_high, self.weights3_low
+        )
+
+        # Backprop through upsampling of low features in the merge step
+        dX_low_fused = self._upsample_backward(dX_low_upsampled_merge)
+
+        # Backprop through convolutions
         dX_low_fused = self.antialias_bottom.convolve_backward(dX_low_fused)
-        dX_high_downsampled = self.downsample_bottom.convolve_backward(dX_low_fused)
 
-        # backprop top-down fusion
-        dX_high_fused_total = self.antialias_top.convolve_backward(dX_high_fused + dX_high_downsampled)
-        dX_low_upsampled = self._upsample_backward(dX_high_fused_total)
+        # Bottom-up fusion backprop
+        dX_low, dX_high_downsampled, dW2_high, dW2_low = self._fuse_features_backward(
+            dX_low_fused, X_low, X_high_downsampled, self.weights2_high, self.weights2_low
+        )
 
-        # backprop initial layers
-        dX_low_combined = dX_low_fused + dX_low_upsampled
+        # Backprop through downsampling
+        dX_high_fused_from_down = self.downsample_bottom.convolve_backward(dX_high_downsampled)
+
+        # Combined gradient for X_high_fused from both paths
+        dX_high_fused_total = dX_high_fused + dX_high_fused_from_down
+        dX_high_fused_total = self.antialias_top.convolve_backward(dX_high_fused_total)
+
+        # Top-down fusion backprop
+        dX_high, dX_low_upsampled, dW1_high, dW1_low = self._fuse_features_backward(
+            dX_high_fused_total, X_high, X_low_upsampled, self.weights1_high, self.weights1_low
+        )
+
+        # Backprop through upsampling
+        dX_low_from_upsampled = self._upsample_backward(dX_low_upsampled)
+
+        # Combined gradient for X_low
+        dX_low_combined = dX_low + dX_low_from_upsampled
+
+        # Backprop through initial layers
         dX_low_initial = self.lateral_low.convolve_backward(dX_low_combined)
         dX_initial = self.downsample_initial.convolve_backward(dX_low_initial)
+        dX_high_initial = self.lateral_high.convolve_backward(dX_high)
 
-        dX_high = self.lateral_high.convolve_backward(dX_high_fused)
+        # Final gradient
+        dX = dX_initial + dX_high_initial
 
-        dX = dX_initial + dX_high  # combine gradients from high and low resolution paths
+        # Update weights using AdaDelta
+        helper.adadelta_update(self.weights1_high, dW1_high, self.E_g_weights1_high, self.E_delta_weights1_high, self.rho, self.eps)
+        helper.adadelta_update(self.weights1_low, dW1_low, self.E_g_weights1_low, self.E_delta_weights1_low, self.rho, self.eps)
 
-        # top-down
-        X_high = self.cache['X_high']
-        X_low_upsampled = self.cache['X_low_upsampled']
+        helper.adadelta_update(self.weights2_high, dW2_high, self.E_g_weights2_high, self.E_delta_weights2_high, self.rho, self.eps)
+        helper.adadelta_update(self.weights2_low, dW2_low, self.E_g_weights2_low, self.E_delta_weights2_low, self.rho, self.eps)
 
-        total_weights1 = self.weights1_high + self.weights1_low + self.eps
-        dW1_high = cp.sum(dX_high_fused * (X_high * total_weights1 - (self.weights1_high * X_high + self.weights1_low * X_low_upsampled)) / total_weights1**2)
-        dW1_low = cp.sum(dX_high_fused * (X_low_upsampled * total_weights1 - (self.weights1_high * X_high + self.weights1_low * X_low_upsampled)) / total_weights1**2)
-
-        # bottom-up
-        X_high_downsampled = self.cache['X_high_downsampled']
-        X_low = self.cache['X_low']
-
-        total_weights2 = self.weights2_high + self.weights2_low + self.eps
-        dW2_high = cp.sum(dX_low_fused * (X_low * total_weights2 - (self.weights2_high * X_low + self.weights2_low * X_high_downsampled)) / total_weights2**2)
-        dW2_low = cp.sum(dX_low_fused * (X_high_downsampled * total_weights2 - (self.weights2_high * X_low + self.weights2_low * X_high_downsampled)) / total_weights2**2)
-
-        helper.adadelta_update(self.weights1_high, dW1_high, self.E_g_weights1_high, self.E_delta_weights1_high, self.rho)
-        helper.adadelta_update(self.weights1_low, dW1_low, self.E_g_weights1_low, self.E_delta_weights1_low, self.rho)
-        helper.adadelta_update(self.weights2_high, dW2_high, self.E_g_weights2_high, self.E_delta_weights2_high, self.rho)
-        helper.adadelta_update(self.weights2_low, dW2_low, self.E_g_weights2_low, self.E_delta_weights2_low, self.rho)
+        helper.adadelta_update(self.weights3_high, dW3_high, self.E_g_weights3_high, self.E_delta_weights3_high, self.rho, self.eps)
+        helper.adadelta_update(self.weights3_low, dW3_low, self.E_g_weights3_low, self.E_delta_weights3_low, self.rho, self.eps)
 
         return dX
 
@@ -166,6 +211,7 @@ class BiFPN:
 
         # reshape so that each block is grouped together, then sum over the upsample dimensions.
         dX = dX_up.reshape(m, H, scale_factor, W, scale_factor, channels).sum(axis=2).sum(axis=3)
+
         return dX
 
     def _fuse_features_forward(self, X_high: cp.ndarray, X_low: cp.ndarray, weights_num: str):
@@ -175,15 +221,46 @@ class BiFPN:
         Args:
             X_high (cp.ndarray): matrix of shape (m, height, width, out_channels) - high resolution features
             X_low (cp.ndarray): matrix of shape (m, height, width, out_channels) - low resolution features
-            weights_num (str): weights1 or weights2 - which weights to use for fusion
+            weights_num (str): weights1 or weights2 or weights3 - which weights to use for fusion
 
         Returns:
             cp.ndarray: fused features with shape (m, height, width, out_channels)
         """
+        weights_high = self.weights1_high
+        weights_low = self.weights1_low
 
-        weights_high = self.weights1_high if weights_num == 'weights1' else self.weights2_high
-        weights_low = self.weights1_low if weights_num == 'weights1' else self.weights2_low
+        if weights_num == 'weights2':
+            weights_high = self.weights2_high
+            weights_low = self.weights2_low
+        elif weights_num == 'weights3':
+            weights_high = self.weights3_high
+            weights_low = self.weights3_low
 
         total_weight = weights_high + weights_low + self.eps
 
         return (X_high * weights_high + X_low * weights_low) / total_weight
+
+    def _fuse_features_backward(self, dZ, X_high: cp.ndarray, X_low: cp.ndarray, weights_high: cp.ndarray, weights_low: cp.ndarray):
+        """
+        Compute gradients for the weighted feature fusion
+
+        Args:
+            dZ (cp.ndarray): Gradient from the subsequent layer
+            X_high (cp.ndarray): High resolution features
+            X_low (cp.ndarray): Low resolution features
+            weights_high (cp.ndarray): Weight for high resolution features
+            weights_low (cp.ndarray): Weight for low resolution features
+
+        Returns:
+            tuple: Gradients for high features, low features, high weight, and low weight
+        """
+        total_weight = weights_high + weights_low + self.eps
+
+        dX_high = (dZ * weights_high) / total_weight
+        dX_low = (dZ * weights_low) / total_weight
+
+        w_sum_squared = total_weight**2
+        dW_high = cp.sum(dZ * ((X_high * total_weight - (weights_high * X_high + weights_low * X_low)) / w_sum_squared))
+        dW_low = cp.sum(dZ * ((X_low * total_weight - (weights_high * X_high + weights_low * X_low)) / w_sum_squared))
+
+        return dX_high, dX_low, dW_high, dW_low

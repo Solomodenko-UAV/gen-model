@@ -5,6 +5,8 @@ from cnn.pkg.blocks.conv_block import ConvBlock
 import numpy as np
 import os
 
+from fpn.pkg.neck.bifpn import BiFPN
+
 on_cpu = os.environ.get("USE_GPU") != False and os.environ.get("USE_GPU") != 'True'
 
 if on_cpu:
@@ -50,6 +52,8 @@ class TinysimmoYOLOModel:
         for block in self.conv_blocks:
             image_size = block.calc_output_dims(image_size)
 
+        self.fpn = BiFPN(in_channels=128, out_channels=128, eps=1e-6)
+
         self.fc_layer = FullyConnected(input_size=image_size[0]*image_size[1]*128, output_size=256, l2_lambda=fc_l2_lambda, clip_value=clip_value)  # 256 is a bit more than 4*4(2*5+1)
         self.output_layer = YoloOutput(input_size=256, S=self.S, B=self.B, C=self.C, l2_lambda=fc_l2_lambda, clip_value=clip_value)
 
@@ -65,6 +69,8 @@ class TinysimmoYOLOModel:
         """
         for block in self.conv_blocks:
             images = block.forward(images)
+
+        images = self.fpn.forward(images)
 
         self.conv_output_shape = images.shape
         images = images.reshape(images.shape[0], -1)
@@ -86,9 +92,11 @@ class TinysimmoYOLOModel:
 
         dZ = dZ.reshape(self.conv_output_shape)
 
+        dZ = self.fpn.backward(dZ)
+
         for block in reversed(self.conv_blocks):
             dZ, dW = block.backward(dZ, learning_rate)
-        
+
         return dW
 
     def save_model(self):
@@ -113,7 +121,7 @@ class TinysimmoYOLOModel:
 
         self.fc_layer.set_params(params, 'fc_layer')
         self.output_layer.set_params(params, 'output_layer')
-        
+
     def gather_debug_data(self):
         """
         Gathers the norms of the weights
@@ -129,5 +137,5 @@ class TinysimmoYOLOModel:
         activations = []
         for i, block in enumerate(self.conv_blocks):
             activations.append((block.activation_values, f'conv_block_{i}'))
-            
+
         return weight_norms, activations

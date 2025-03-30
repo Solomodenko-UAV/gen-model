@@ -87,6 +87,44 @@ def create_orthogonal_4d_matrix(shape: tuple, gain: float = 1.0):
     W = W.transpose(1, 2, 3, 0)
     return (W.astype(cp.float32) * gain)
 
+def create_orthogonal_3d_matrix(shape: tuple, gain: float = 1.0):
+    """
+    Creates a 3D orthogonal matrix for depthwise convolution layers.
+
+    Args:
+        shape (tuple): (filter_height, filter_width, input_channels)
+        gain (float): Gain factor to scale the weights.
+
+    Returns:
+        cp.ndarray: Orthogonal weight tensor of shape (filter_height, filter_width, input_channels)
+    """
+    filter_height, filter_width, input_channels = shape
+
+    # Flatten the 3D shape into 2D (input_channels, filter_height * filter_width)
+    flat_shape = (input_channels, filter_height * filter_width)
+    a = cp.random.randn(*flat_shape).astype(cp.float32)
+
+    # Compute the SVD of the flattened matrix
+    u, s, vh = cp.linalg.svd(a, full_matrices=False)
+
+    # Select the matrix with orthogonal rows or columns based on shape
+    if flat_shape[0] <= flat_shape[1]:
+        # Case: input_channels <= filter_height * filter_width
+        # Use rows of vh (orthonormal rows)
+        W_flat = vh[:flat_shape[0], :]  # shape (input_channels, filter_height * filter_width)
+    else:
+        # Case: input_channels > filter_height * filter_width
+        # Use columns of u (orthonormal columns)
+        W_flat = u[:, :flat_shape[1]]  # shape (input_channels, filter_height * filter_width)
+
+    # Reshape back to 3D (input_channels, filter_height, filter_width)
+    W = W_flat.reshape(input_channels, filter_height, filter_width)
+
+    # Transpose to (filter_height, filter_width, input_channels)
+    W = W.transpose(1, 2, 0)
+
+    return (W * gain).astype(cp.float32)
+
 
 def create_orthogonal_2d_matrix(shape: tuple, gain: float = 1.0):
     """
