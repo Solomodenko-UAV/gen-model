@@ -58,7 +58,7 @@ class DepthwiseConv(Convolution):
 
         self.cache = {}
 
-    def convolve_forward_vectorized(self, X: cp.ndarray):
+    def convolve_forward(self, X: cp.ndarray):
         """
         Forward pass using depthwise separable convolution.
         Args:
@@ -81,7 +81,7 @@ class DepthwiseConv(Convolution):
 
         return conv_out
 
-    def convolve_backward_vectorized(self, dZ: cp.ndarray, learning_rate: float):
+    def convolve_backward(self, dZ: cp.ndarray):
         """
         Backward pass for depthwise separable convolution.
         Args:
@@ -157,13 +157,19 @@ class DepthwiseConv(Convolution):
 
         X_cols = im2col(X, filter_height, filter_width, self.padding, self.stride)  # shape (m * output_height * output_width, filter_height * filter_width * input_channels)
 
-        dZ_reshaped = dZ.transpose(3, 0, 1, 2).reshape(self.input_channels, -1)  # shape (input_channels, m * output_height * output_width)
-        
-        dW_cols = cp.dot(X_cols, dZ_reshaped.T)  # shape (filter_height * filter_width * input_channels, num_filters)
-        dW = dW_cols.reshape(filter_height, filter_width, self.input_channels)  # shape (filter_height, filter_width, input_channels)
+        X_cols = X_cols.reshape(filter_height * filter_width, self.input_channels, -1)  # shape (filter_height * filter_width, input_channels, m * output_height * output_width)
 
-        filters_reshaped = self.depthwise_kernel.reshape(-1, num_filters)  # shape (filter_height * filter_width * input_channels, num_filters)
-        dX_cols = cp.dot(filters_reshaped, dZ_reshaped)  # (filter_height*filter_width*C_in, N*out_height*out_width)
+        dZ_reshaped = dZ.transpose(0, 3, 1, 2).reshape(self.input_channels, -1)  # shape (input_channels, m * output_height * output_width)
+
+        dW_flat = cp.einsum('ijk,ik->ij', X_cols, dZ_reshaped)
+        dW = dW_flat.reshape(filter_height, filter_width, self.input_channels)  # shape (filter_height, filter_width, input_channels)
+
+        depthwise_kernel_flat = self.depthwise_kernel.reshape(filter_height, filter_width, self.input_channels)
+
+        # For each channel c, the contribution is: depthwise_kernel_flat[:, c] * dZ_reshaped[c, :]
+        # We can compute this by:
+        dX_cols = (depthwise_kernel_flat[:, :, None] * dZ_reshaped[None, :, :]).reshape(filter_height*filter_width * self.input_channels, -1)
+
         dX = col2im(dX_cols, X.shape, filter_height, filter_width, self.padding, self.stride)
 
         return dX, dW
