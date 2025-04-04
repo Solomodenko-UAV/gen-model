@@ -7,9 +7,6 @@ import matplotlib.patches as patches
 import matplotlib.pyplot as plt
 from keras.api.optimizers import Adadelta
 from metadata import visDrone
-import keras._tf_keras.keras.activations as activations
-import tensorflow.keras as keras
-
 
 
 class TFYOLOActorPhoto():
@@ -33,17 +30,17 @@ class TFYOLOActorPhoto():
 
         factor_H = orig_image.shape[0] / self.input_shape[0]
         factor_W = orig_image.shape[1] / self.input_shape[1]
-        grid_cell_size = (downscaled_image.shape[0] / self.model.S, downscaled_image.shape[1] / self.model.S)
+        grid_cell_size = (self.input_shape[0] / self.model.S, self.input_shape[1] / self.model.S)
         self._compile_model(factor_H, factor_W, grid_cell_size)
 
-        X = tf.expand_dims(downscaled_image, axis=0)  # add batch dimension (1, ...)
+        X = tf.expand_dims(downscaled_image, axis=0)  # Add batch dimension (1, ...)
 
         downscaled_annotations = self.data_processor.load_annotations_for_training(
             S=self.model.S,
             B=self.model.B,
             C=self.model.C,
             anchors=self.model.get_anchors(),
-            annotation_file_name='0000001_02999_d_0000005.txt'
+            annotation_file_name='0000006_00159_d_0000001.txt'
         )
 
         Y_true = tf.expand_dims(downscaled_annotations, axis=0)  # add batch dimension (1, ...)
@@ -53,7 +50,7 @@ class TFYOLOActorPhoto():
             y=Y_true,
             batch_size=self.mini_batch_size,
             epochs=epochs,
-            verbose=1,
+            verbose='1',
         )
 
         return history
@@ -111,14 +108,14 @@ class TFYOLOActorPhoto():
             focal_alpha=0.25,
         )
 
-        optimizer = Adadelta(
-            learning_rate=0.001,
-            rho=0.95,
-            epsilon=1e-7,
-        )
+        # optimizer = Adadelta(
+        #     learning_rate=0.001,
+        #     rho=0.95,
+        #     epsilon=1e-7,
+        # )
 
         self.model.compile(
-            optimizer=optimizer,
+            optimizer='adadelta',
             loss=loss,
             metrics=['accuracy'],
         )

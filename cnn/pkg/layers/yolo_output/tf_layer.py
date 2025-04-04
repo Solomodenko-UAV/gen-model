@@ -1,5 +1,4 @@
 import tensorflow as tf
-from keras import initializers
 from keras import layers
 
 from keras.api.layers import Layer, Dense
@@ -19,15 +18,15 @@ class TFYoloOutput(Layer):
 
         self.fc = Dense(
             units=out_dim,
-            kernel_initializer=initializers.Orthogonal(),
-            bias_initializer=initializers.Zeros(),
+            kernel_initializer='orthogonal',#'he_normal',
+            bias_initializer='zeros',
             kernel_regularizer=l2(l2_lambda),
         )
 
         self.reshaper = layers.Reshape((S, S, self.out_per_cell))
         self.anchors = anchors
 
-    def call(self, input):
+    def call(self, input: tf.Tensor):
         A = self.fc(input)
         A = self.reshaper(A)
 
@@ -54,7 +53,7 @@ class TFYoloOutput(Layer):
             width = tf.expand_dims(A[:, :, :, width_idx], axis=-1)
             height = tf.expand_dims(A[:, :, :, height_idx], axis=-1)
 
-            anchor_w, anchor_h = self.anchors[b]
+            anchor_w, anchor_h = tf.gather(self.anchors, b)
             width_exp = anchor_w * tf.exp(width)
             height_exp = anchor_h * tf.exp(height)
 

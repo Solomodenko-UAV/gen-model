@@ -3,6 +3,7 @@ import os
 import numpy as np
 from metadata import visDrone
 import tensorflow as tf
+from keras.api.ops import convert_to_numpy
 
 
 class DataPreProcessor:
@@ -21,7 +22,6 @@ class DataPreProcessor:
         image_files = os.listdir(self.images_folder)
         image_file = image_files[0]
         image_path = os.path.join(self.images_folder, image_file)
-        annotation_path = os.path.join(self.annotations_folder, image_file.split('.')[0]) + ".txt"
 
         image, downscaled_image = self.prepare_single_image(image_path=image_path, target_size=target_images_shape)
 
@@ -63,16 +63,12 @@ class DataPreProcessor:
 
     def prepare_single_image(self, image_path: str, target_size: tuple):
         orig_image = self.load_single_image(image_path=image_path)
-
-        downscaled_image = _downscale_img(orig_image.numpy(), target_size)
-
-        mean = np.array([0.485, 0.456, 0.406])  # ImageNet mean
-        std = np.array([0.229, 0.224, 0.225])   # ImageNet std
-        downscaled_image = (np.array(downscaled_image) / 255.0 - mean) / std
-
+        downscaled_image = tf.image.resize(orig_image, target_size, method='nearest', antialias=True)   
+        downscaled_image = tf.cast(downscaled_image, tf.float32) / 255.0
+        downscaled_image = tf.image.per_image_standardization(downscaled_image)
         downscaled_image = tf.convert_to_tensor(downscaled_image, dtype=tf.float32)
 
-        return orig_image, downscaled_image
+        return tf.convert_to_tensor(orig_image), tf.convert_to_tensor(downscaled_image)
 
 
 def _extract_visDrone_annotations(file_path: str):
@@ -255,8 +251,8 @@ def _cook_annotations(annotations: np.ndarray, model_input_img_shape: tuple, S: 
         ])
 
         true_center_offset = np.array([X_cells_offset[i], Y_cells_offset[i]])
-
-        distances = np.linalg.norm(anchors.numpy() - true_center_offset, axis=1)
+        
+        distances = np.linalg.norm(convert_to_numpy(anchors) - true_center_offset, axis=1)
         best_bbox_slot = np.argmin(distances)
 
         start_index = best_bbox_slot * 5

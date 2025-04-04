@@ -1,11 +1,11 @@
 
 import tensorflow as tf
-from cnn.pkg.blocks.conv_block import ConvBlock
+from cnn.pkg.blocks.tf_conv_block import ConvBlock
 from cnn.pkg.layers.yolo_output.tf_layer import TFYoloOutput
-from tensorflow.python.keras.layers import Dense, Flatten
+from keras.api.layers import Dense, Flatten
 from keras import initializers
-from tensorflow.python.keras.regularizers import l2
-from tensorflow.python.keras import Model
+from keras.api.regularizers import l2
+from keras.api import Model
 
 
 class TFTinysimmoYOLOModel(Model):
@@ -25,19 +25,19 @@ class TFTinysimmoYOLOModel(Model):
                          conv_momentum=0.8
                          ):
         self.conv_blocks = [
-            ConvBlock(first_layer_num_of_filters=16, second_layer_num_of_filters=16, input_channels=3, l2_lambda=conv_l2_lambda, momentum=conv_momentum),
-            ConvBlock(first_layer_num_of_filters=16, second_layer_num_of_filters=32, input_channels=16, l2_lambda=conv_l2_lambda, momentum=conv_momentum),
-            ConvBlock(first_layer_num_of_filters=32, second_layer_num_of_filters=64, input_channels=32, l2_lambda=conv_l2_lambda, momentum=conv_momentum),
-            ConvBlock(first_layer_num_of_filters=64, second_layer_num_of_filters=64, input_channels=64, l2_lambda=conv_l2_lambda, momentum=conv_momentum),
-            ConvBlock(first_layer_num_of_filters=128, second_layer_num_of_filters=128, input_channels=64, l2_lambda=conv_l2_lambda, momentum=conv_momentum),
+            ConvBlock(first_layer_num_of_filters=16, second_layer_num_of_filters=16, l2_lambda=conv_l2_lambda, momentum=conv_momentum),
+            ConvBlock(first_layer_num_of_filters=16, second_layer_num_of_filters=32, l2_lambda=conv_l2_lambda, momentum=conv_momentum),
+            ConvBlock(first_layer_num_of_filters=32, second_layer_num_of_filters=64, l2_lambda=conv_l2_lambda, momentum=conv_momentum),
+            ConvBlock(first_layer_num_of_filters=64, second_layer_num_of_filters=64, l2_lambda=conv_l2_lambda, momentum=conv_momentum),
+            ConvBlock(first_layer_num_of_filters=128, second_layer_num_of_filters=128, l2_lambda=conv_l2_lambda, momentum=conv_momentum),
         ]
 
         self.flatten = Flatten()
 
         self.fc_layer = Dense(
             units=256,
-            kernel_initializer=initializers.Orthogonal(),
-            bias_initializer=initializers.Zeros(),
+            kernel_initializer='orthogonal',#'he_normal',
+            bias_initializer='zeros',
             kernel_regularizer=l2(fc_l2_lambda),
         )
 
@@ -60,7 +60,7 @@ class TFTinysimmoYOLOModel(Model):
     def get_anchors(self):
         return self.output_layer.anchors
 
-    def call(self, images: tf.Tensor, anchors: tf.Tensor = None):
+    def call(self, images: tf.Tensor):
         """
         forward pass of the model
 
@@ -77,6 +77,6 @@ class TFTinysimmoYOLOModel(Model):
 
         x = self.flatten(x)
         x = self.fc_layer(x)
-        x = self.output_layer.call(x, anchors)
+        x = self.output_layer.call(x)
 
         return x

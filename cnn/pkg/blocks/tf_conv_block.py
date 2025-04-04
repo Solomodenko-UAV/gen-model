@@ -1,9 +1,8 @@
-from tensorflow.python.keras.activations import leaky_relu
-from tensorflow.python.keras.layers import Conv2D, MaxPooling2D, LeakyReLU
-from keras import initializers
+from keras.api.activations import leaky_relu
+from keras.api.layers import Conv2D, MaxPooling2D, LeakyReLU
 from keras import layers
-from tensorflow.python.keras.regularizers import l2
-from tensorflow.python.keras.layers import Layer
+from keras.api.regularizers import l2
+from keras.api.layers import Layer
 
 
 conv_filter_size = 3
@@ -28,8 +27,8 @@ class ConvBlock(Layer):
             kernel_size=(conv_filter_size, conv_filter_size),
             strides=(conv_stride, conv_stride),
             padding='same',
-            kernel_initializer=initializers.Orthogonal(),
-            bias_initializer=initializers.Zeros(),
+            kernel_initializer='orthogonal',#'he_normal',
+            bias_initializer='zeros',#'he_normal',
             kernel_regularizer=l2(l2_lambda),
         )
 
@@ -52,8 +51,8 @@ class ConvBlock(Layer):
             strides=(conv_stride, conv_stride),
             padding='same',
             kernel_regularizer=l2(l2_lambda),
-            kernel_initializer=initializers.Orthogonal(),
-            bias_initializer=initializers.Zeros(),
+            kernel_initializer='orthogonal',#'he_normal',
+            bias_initializer='zeros',
         )
 
         self.batch_norm2 = layers.BatchNormalization(
