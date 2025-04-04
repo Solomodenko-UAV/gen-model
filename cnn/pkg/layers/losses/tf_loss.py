@@ -1,6 +1,6 @@
 import tensorflow as tf
 import numpy as np
-from tensorflow.python.keras.losses import Loss
+from keras.api.losses import Loss
 
 
 def calculate_iou(boxes1, boxes2):

@@ -1,7 +1,7 @@
 
 import tensorflow as tf
-from blocks.tf_conv_block import ConvBlock
-from layers.yolo_output.tf_layer import TFYoloOutput
+from cnn.pkg.blocks.conv_block import ConvBlock
+from cnn.pkg.layers.yolo_output.tf_layer import TFYoloOutput
 from tensorflow.python.keras.layers import Dense, Flatten
 from keras import initializers
 from tensorflow.python.keras.regularizers import l2
@@ -56,6 +56,9 @@ class TFTinysimmoYOLOModel(Model):
             anchors (tf.Tensor): anchors for the model
         """
         self.output_layer.anchors = anchors
+
+    def get_anchors(self):
+        return self.output_layer.anchors
 
     def call(self, images: tf.Tensor, anchors: tf.Tensor = None):
         """

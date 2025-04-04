@@ -1,15 +1,15 @@
 import numpy as np
 import tensorflow as tf
-from tensorflow.python import keras
-from tensorflow.python.keras.optimizers import adadelta_v2
 from cnn.pkg.layers.data_pre_processing.tf_data_pre_processing import DataPreProcessor
 from cnn.pkg.models.tf_tinysimmoYOLO import TFTinysimmoYOLOModel
 from cnn.pkg.layers.losses.tf_loss import YOLOLoss
-from tensorflow.python.ops.image_ops import non_max_suppression
 import matplotlib.patches as patches
 import matplotlib.pyplot as plt
-
+from keras.api.optimizers import Adadelta
 from metadata import visDrone
+import keras._tf_keras.keras.activations as activations
+import tensorflow.keras as keras
+
 
 
 class TFYOLOActorPhoto():
@@ -26,22 +26,33 @@ class TFYOLOActorPhoto():
         self.mini_batch_size = mini_batch_size
         self.input_shape = model_input_img_res
 
-    def train_model(self):
-        orig_image, downscaled_image, downscaled_annotations = self.data_processor.load_data_for_training(self.input_shape)
+    def train_model(self, loops: int = 1):
+        orig_image, downscaled_image = self.data_processor.load_images_for_training(self.input_shape)
 
-        factor_W = orig_image.shape[0] / self.input_shape[0]
-        factor_H = orig_image.shape[1] / self.input_shape[1]
+        epochs = loops * 1  # since it's a single image
+
+        factor_H = orig_image.shape[0] / self.input_shape[0]
+        factor_W = orig_image.shape[1] / self.input_shape[1]
         grid_cell_size = (downscaled_image.shape[0] / self.model.S, downscaled_image.shape[1] / self.model.S)
         self._compile_model(factor_H, factor_W, grid_cell_size)
 
-        X = keras.Input(shape=self.input_shape, batch_size=self.mini_batch_size)(downscaled_image)
-        Y_true = keras.Input(shape=downscaled_annotations.shape, batch_size=self.mini_batch_size)(downscaled_annotations)
+        X = tf.expand_dims(downscaled_image, axis=0)  # add batch dimension (1, ...)
+
+        downscaled_annotations = self.data_processor.load_annotations_for_training(
+            S=self.model.S,
+            B=self.model.B,
+            C=self.model.C,
+            anchors=self.model.get_anchors(),
+            annotation_file_name='0000001_02999_d_0000005.txt'
+        )
+
+        Y_true = tf.expand_dims(downscaled_annotations, axis=0)  # add batch dimension (1, ...)
 
         history = self.model.fit(
             x=X,
             y=Y_true,
             batch_size=self.mini_batch_size,
-            epochs=10,
+            epochs=epochs,
             verbose=1,
         )
 
@@ -49,8 +60,13 @@ class TFYOLOActorPhoto():
 
     def print_results(self, image_path: str):
         box_coordinates, scores, classes = self.predict(image_path=image_path)
+        if box_coordinates.shape[0] == 0:
+            print("No objects detected.")
+            return
+
         box_coordinates = self._upscale_bboxes(box_coordinates)
         image = self.data_processor.load_single_image(image_path=image_path)
+
         y1, x1, y2, x2 = box_coordinates[0]
 
         _, ax = plt.subplots(1, 1, figsize=(12, 8))
@@ -62,16 +78,20 @@ class TFYOLOActorPhoto():
             y1, x1, y2, x2 = box_coordinates[i]
             rect = patches.Rectangle((x1, y1), x2 - x1, y2 - y1, linewidth=1, edgecolor='r', facecolor='none')
             ax.add_patch(rect)
-            label = visDrone.categories.get()
+            label = visDrone.categories.get(classes[i], "Unknown")
             ax.text(x1, y1, f'{label} {scores[i]:.2f}', color='white', fontsize=12,)
 
     def predict(self, image_path: str, iou_threshold: float = 0.5):
+        """
+        predict for the single image
+        """
+
         img, image_downsampled = self.data_processor.prepare_single_image(image_path, self.input_shape)
 
         self.factor_H = img.shape[0] / self.input_shape[0]
         self.factor_W = img.shape[1] / self.input_shape[1]
 
-        image_downsampled = keras.Input(shape=self.input_shape, batch_size=1)(image_downsampled)
+        image_downsampled = tf.expand_dims(image_downsampled, axis=0)  # add batch dimension (1, H, W, C)
 
         predictions = self.model.predict(image_downsampled)
 
@@ -79,7 +99,7 @@ class TFYOLOActorPhoto():
 
     def _compile_model(self, factor_H: float, factor_W: float, grid_cell_size: tuple):
         anchors = self.data_processor.find_out_anchors(factor_H, factor_W, grid_cell_size, self.model.B)
-        self.model.set_anchors(anchors)
+        self.model.set_anchors(tf.convert_to_tensor(anchors))
 
         loss = YOLOLoss(
             S=self.model.S,
@@ -91,7 +111,7 @@ class TFYOLOActorPhoto():
             focal_alpha=0.25,
         )
 
-        optimizer = adadelta_v2.Adadelta(
+        optimizer = Adadelta(
             learning_rate=0.001,
             rho=0.95,
             epsilon=1e-7,
@@ -103,71 +123,104 @@ class TFYOLOActorPhoto():
             metrics=['accuracy'],
         )
 
-    def _bboxes_from_predictions(self, predictions: np.ndarray, iou_threshold: float = 0.5):
+    def _bboxes_from_predictions(self, predictions, iou_threshold=0.5, score_threshold=0.1):
         """
         Convert the predictions to bounding boxes.
 
         Args:
-            predictions (np.ndarray): matrices of shape (m, S * S * B, 6)
-            iou_threshold (float): IoU threshold for non-max suppression
+            predictions: tensor of shape (batch_size, S, S, B*5+C)
+            iou_threshold: IoU threshold for non-max suppression
 
         Returns:
-            bboxes (np.ndarray): bounding boxes of shape (m, 4) [y1, x1, y2, x2]
-            scores (np.ndarray): scores of shape (m, 1)
-            classes (np.ndarray): classes of shape (m, 1)
+            boxes_coordinates: tensor of shape (num_boxes, 4) [y1, x1, y2, x2]
+            boxes_scores: tensor of shape (num_boxes,)
+            boxes_classes: tensor of shape (num_boxes,)
         """
 
         m = predictions.shape[0]
-        B = self.model.B
         S = self.model.S
+        B = self.model.B
 
-        cell_width = self.model_input_img_res[0] / S
-        cell_height = self.model_input_img_res[1] / S
+        cell_width = self.input_shape[1] / S
+        cell_height = self.input_shape[0] / S
 
-        boxes = np.zeros((m, S, S, B, 6))
+        all_boxes = []
+        all_scores = []
+        all_classes = []
 
-        boxes_coordinates = np.zeros((m, 4))
-        boxes_scores = np.zeros((m, 1))
-        boxes_classes = np.zeros((m, 1))
-
+        # Process each item in the batch
         for i in range(m):
-            for b in range(B):
-                x_idx = b * 5
-                y_idx = b * 5 + 1
-                w_idx = b * 5 + 2
-                h_idx = b * 5 + 3
-                conf_idx = b * 5 + 4
+            batch_pred = predictions[i]  # Shape: (S, S, B*5+C)
 
-                x = predictions[i, :, :, x_idx]
-                y = predictions[i, :, :, y_idx]
-                w = predictions[i, :, :, w_idx]
-                h = predictions[i, :, :, h_idx]
-                confidence = predictions[i, :, :, conf_idx]
+            # For each bounding box predictor
+            for box_idx in range(B):
+                start_idx = box_idx * 5
 
-                class_probs = predictions[i, :, :, b * 5:]
-                class_ids = np.argmax(class_probs, axis=-1)
-                score = np.max(class_probs, axis=3) * confidence
+                # Extract predictions for this box
+                x = batch_pred[:, :, start_idx]      # Center x (relative to cell)
+                y = batch_pred[:, :, start_idx + 1]  # Center y (relative to cell)
+                w = batch_pred[:, :, start_idx + 2]  # Width (normalized)
+                h = batch_pred[:, :, start_idx + 3]  # Height (normalized)
+                confidence = batch_pred[:, :, start_idx + 4]  # Confidence
 
-                x1 = (x + np.arange(S)) * cell_width
-                y1 = (y + np.arange(S)) * cell_height
+                grid_y, grid_x = tf.meshgrid(tf.range(S, dtype=tf.float32),
+                                             tf.range(S, dtype=tf.float32))
 
-                x2 = x1 + w
-                y2 = y1 + h
+                # absolute coordinates
+                abs_x = (x + grid_x) * cell_width
+                abs_y = (y + grid_y) * cell_height
+                abs_w = w * self.input_shape[1]
+                abs_h = h * self.input_shape[0]
 
-                boxes_coordinates[i, 0] = y1
-                boxes_coordinates[i, 1] = x1
-                boxes_coordinates[i, 2] = y2
-                boxes_coordinates[i, 3] = x2
+                # corner format [y1, x1, y2, x2]
+                y1 = abs_y - abs_h / 2
+                x1 = abs_x - abs_w / 2
+                y2 = abs_y + abs_h / 2
+                x2 = abs_x + abs_w / 2
 
-                boxes_scores[i, 0] = score
-                boxes_classes[i, 0] = class_ids
+                # class predictions
+                class_scores = batch_pred[:, :, B*5:]  # Shape: (S, S, C)
+                class_idx = tf.argmax(class_scores, axis=-1)  # Shape: (S, S)
+                max_class_score = tf.reduce_max(class_scores, axis=-1)  # Shape: (S, S)
 
-        indices = non_max_suppression(boxes_coordinates, boxes_scores, iou_threshold=iou_threshold)
-        boxes_coordinates = tf.gather(boxes_coordinates, indices)
-        boxes_scores = tf.gather(boxes_scores, indices)
-        boxes_classes = tf.gather(boxes_classes, indices)
+                # Final score is confidence * class score
+                final_scores = confidence * max_class_score
 
-        return boxes_coordinates, boxes_scores, boxes_classes
+                # Reshape everything to [S*S, ...]
+                boxes = tf.stack([y1, x1, y2, x2], axis=-1)
+                boxes = tf.reshape(boxes, [-1, 4])
+                final_scores = tf.reshape(final_scores, [-1])
+                class_idx = tf.reshape(class_idx, [-1])
+
+                # Filter out low confidence boxes
+                conf_mask = final_scores > score_threshold
+                filtered_boxes = tf.boolean_mask(boxes, conf_mask)
+                filtered_scores = tf.boolean_mask(final_scores, conf_mask)
+                filtered_classes = tf.boolean_mask(class_idx, conf_mask)
+
+                # Apply NMS
+                selected_indices = tf.image.non_max_suppression(
+                    filtered_boxes, filtered_scores, max_output_size=100,
+                    iou_threshold=iou_threshold
+                )
+
+                selected_boxes = tf.gather(filtered_boxes, selected_indices)
+                selected_scores = tf.gather(filtered_scores, selected_indices)
+                selected_classes = tf.gather(filtered_classes, selected_indices)
+
+                all_boxes.append(selected_boxes)
+                all_scores.append(selected_scores)
+                all_classes.append(selected_classes)
+
+        # combine results from all batches
+        if all_boxes:
+            boxes_coordinates = tf.concat(all_boxes, axis=0)
+            boxes_scores = tf.concat(all_scores, axis=0)
+            boxes_classes = tf.concat(all_classes, axis=0)
+            return boxes_coordinates, boxes_scores, boxes_classes
+        else:
+            # empty tensors if no boxes were found
+            return tf.zeros((0, 4)), tf.zeros((0,)), tf.zeros((0,), dtype=tf.int64)
 
     def _upscale_bboxes(self, bboxes: np.ndarray):
         """

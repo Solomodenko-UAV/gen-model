@@ -24,6 +24,27 @@
                 "USE_GPU": "True"
             },
             "console": "integratedTerminal"
+        },
+
+        {
+            "name": "TF CPU: main_tf.py",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/main_tf.py",
+            "env": {
+                "USE_GPU": "False"
+            },
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "TF GPU: main_tf.py",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/main_tf.py",
+            "env": {
+                "USE_GPU": "True"
+            },
+            "console": "integratedTerminal"
         }
     ]
 }

@@ -1,10 +1,9 @@
 import tensorflow as tf
-from tensorflow.python import keras
-from tensorflow.python.keras.layers import Dense
 from keras import initializers
 from keras import layers
-from tensorflow.python.keras.regularizers import l2
-from tensorflow.python.keras.layers import Layer
+
+from keras.api.layers import Layer, Dense
+from keras.api.regularizers import l2
 
 
 class TFYoloOutput(Layer):

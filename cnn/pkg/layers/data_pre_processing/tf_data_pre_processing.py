@@ -11,34 +11,40 @@ class DataPreProcessor:
         self.annotations_folder = annotations_folder
         self.data_idx = data_idx
 
-    def load_data_for_training(self, target_images_shape: tuple):
+    def load_images_for_training(self, target_images_shape: tuple):
         """
         Load data for training
         Returns:
-            tuple: original image, downscaled images and downscaled annotations
+            tuple: original image, downscaled image
         """
         # TODO: currently only for single image
         image_files = os.listdir(self.images_folder)
         image_file = image_files[0]
         image_path = os.path.join(self.images_folder, image_file)
-        annotation_path = os.path.join(self.annotations_folder, image_file) + ".txt"
+        annotation_path = os.path.join(self.annotations_folder, image_file.split('.')[0]) + ".txt"
 
         image, downscaled_image = self.prepare_single_image(image_path=image_path, target_size=target_images_shape)
-        factor_H = image.shape[0] / target_images_shape[0]
-        factor_W = image.shape[1] / target_images_shape[1]
 
+        self.factor_H = image.shape[0] / target_images_shape[0]
+        self.factor_W = image.shape[1] / target_images_shape[1]
+        self.downscale_shape = target_images_shape
+
+        return image, downscaled_image
+
+    def load_annotations_for_training(self, S: int, B: int, C: int, anchors: tf.Tensor, annotation_file_name: str):
+        annotation_path = os.path.join(self.annotations_folder, annotation_file_name)
         annotations = _extract_visDrone_annotations(annotation_path)
-        downscaled_annotations = _downscale_annotations(annotations, factor_H, factor_W)
-        downscaled_annotations = np.array(downscaled_annotations, dtype=np.float32)
-
-        return image, downscaled_image, downscaled_annotations
+        downscaled_annotations = _downscale_annotations(annotations, self.factor_H, self.factor_W)
+        downscaled_annotations = _cook_annotations(np.array(downscaled_annotations), self.downscale_shape, S, B, C, anchors)
+        
+        return downscaled_annotations   
 
     def find_out_anchors(self, factor_H: float, factor_W: float, grid_cell_size: tuple, B: int):
         annotation_files = os.listdir(self.annotations_folder)
-        boxes = [[] for _ in annotation_files]
+        boxes = []
 
         for annotation_file in annotation_files:
-            annotations = _extract_visDrone_annotations(os.path.join(self.annotation_folder, annotation_file) + ".txt")
+            annotations = _extract_visDrone_annotations(os.path.join(self.annotations_folder, annotation_file))
             if len(annotations) == 0:
                 continue
 
@@ -64,7 +70,7 @@ class DataPreProcessor:
         std = np.array([0.229, 0.224, 0.225])   # ImageNet std
         downscaled_image = (np.array(downscaled_image) / 255.0 - mean) / std
 
-        downscaled_image = tf.Tensor(downscaled_image, dtype=tf.float32)
+        downscaled_image = tf.convert_to_tensor(downscaled_image, dtype=tf.float32)
 
         return orig_image, downscaled_image
 
@@ -101,17 +107,17 @@ def _downscale_annotations(annotations: list, factor_H: float, factor_W: float):
         factor_W (float): width factor
 
     Returns:
-        list: list of downscaled annotations
+        list: list of downscaled annotations of shape (8,)
     """
     downscaled_annotations = []
 
     for annotation in annotations:
-        x1 = int(annotation[visDrone.x1_idx] / factor_W)
-        y1 = int(annotation[visDrone.y1_idx] / factor_H)
-        x2 = int(annotation[visDrone.x2_idx] / factor_W)
-        y2 = int(annotation[visDrone.y2_idx] / factor_H)
+        annotation[visDrone.top_left_x_idx] = int(annotation[visDrone.top_left_x_idx] / factor_W)
+        annotation[visDrone.top_left_y_idx] = int(annotation[visDrone.top_left_y_idx] / factor_H)
+        annotation[visDrone.width_idx] = int(annotation[visDrone.width_idx] / factor_W)
+        annotation[visDrone.height_idx] = int(annotation[visDrone.height_idx] / factor_H)
 
-        downscaled_annotations.append([x1, y1, x2, y2])
+        downscaled_annotations.append(annotation)
 
     return downscaled_annotations
 
@@ -192,3 +198,69 @@ def _downscale_img(image: np.ndarray, new_shape: tuple):
     reshaped = image_cropped.reshape(new_height, factor_H, new_width, factor_W, image.shape[2])
 
     return reshaped.mean(axis=(1, 3)).astype(np.uint8)
+
+
+def _cook_annotations(annotations: np.ndarray, model_input_img_shape: tuple, S: int, B: int, C: int, anchors: tf.Tensor):
+    """
+    convert list of annotations to the model output shape
+
+    Args:
+        annotations (np.ndarray): true values - matrix of shape (m, 8), represents a batch of m annotations
+        original_img_shape (tuple): shape of the original image (width, height)
+        model_input_img_shape (tuple): shape of the image that the model accepts (width, height)
+        anchors (np.ndarray): normalized ([0, 1]) anchors for the model - matrix of shape (B, 2), represents the anchors for the model
+
+    Returns:
+        Y_target (np.ndarray): true values - matrix of shape (S, S, B*5+C), represents a batch of m images
+    """
+    m = annotations.shape[0]
+
+    Y_norm = annotations.copy()
+
+    # assign annotations to a grid cells
+    X_center = (Y_norm[:, visDrone.top_left_x_idx] + Y_norm[:, visDrone.width_idx] / 2)
+    Y_center = (Y_norm[:, visDrone.top_left_y_idx] + Y_norm[:, visDrone.height_idx] / 2)
+    cell_height = model_input_img_shape[0] / S
+    cell_width = model_input_img_shape[1] / S
+
+    # assign bounding box to a cell
+    cells_x = X_center // cell_width
+    cells_y = Y_center // cell_height
+
+    # calc offset of the x and y inside the cell where the center of the box is. Relative values [0, 1]
+    X_cells_offset = (X_center - cells_x * cell_width) / cell_width  # shape (m,)
+    Y_cells_offset = (Y_center - cells_y * cell_height) / cell_height  # shape (m,)
+
+    # create one-hot encoding vector for the class
+    class_targets = np.zeros((m, C))
+    categories = Y_norm[:, visDrone.category_idx].astype(np.int8)
+    class_targets[np.arange(m), categories] = 1
+    # smooth one-hot encoding vector
+    class_targets = (1 - 1e-6) * class_targets + 1e-6 / C
+
+    # construct output matrix - aka reshape annotations to the model output shape
+    Y_target = np.zeros((S, S, B * 5 + C)).astype(np.float32)
+
+    for i in range(m):
+        cell_x = int(cells_x[i])
+        cell_y = int(cells_y[i])
+
+        # bounding box target
+        bbox_target = np.array([
+            X_cells_offset[i],
+            Y_cells_offset[i],
+            Y_norm[i, visDrone.width_idx] / cell_width,
+            Y_norm[i, visDrone.height_idx] / cell_height,
+            1,
+        ])
+
+        true_center_offset = np.array([X_cells_offset[i], Y_cells_offset[i]])
+
+        distances = np.linalg.norm(anchors.numpy() - true_center_offset, axis=1)
+        best_bbox_slot = np.argmin(distances)
+
+        start_index = best_bbox_slot * 5
+        Y_target[cell_y, cell_x, start_index:start_index+5] = bbox_target
+        Y_target[cell_y, cell_x, B * 5:] = class_targets[i]
+
+    return Y_target
