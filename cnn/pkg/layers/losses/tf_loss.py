@@ -226,7 +226,8 @@ class YOLOLoss(Loss):
 
         # Calculate total loss
         total_loss = (total_box_loss + total_obj_loss + total_noobj_loss + class_loss) / tf.cast(1, tf.float32) # TODO: change 1 to batch_size
-
+        total_loss += 0.15 * self._negative_coordinate_penalty(y_pred)  
+        
         return total_loss
 
     def _compute_box_loss(self, y_true: tf.Tensor, y_pred: tf.Tensor, box_idx: int, batch_size: int):
@@ -244,17 +245,56 @@ class YOLOLoss(Loss):
         noobj_mask = 1.0 - obj_mask
 
         # Calculate CIoU
-        ciou_values = calculate_ciou(pred_box, true_box, batch_size, self.S)
-        ciou_values = tf.expand_dims(ciou_values, -1)
+        iou_values = calculate_iou(pred_box, true_box, batch_size, self.S)
+        iou_values = tf.expand_dims(iou_values, -1)
 
         # Box coordinate loss (only for cells with objects)
-        box_loss = self.lambda_coord * tf.reduce_sum(tf.multiply(obj_mask, (1.0 - ciou_values)))
+        box_loss = self.lambda_coord * tf.reduce_sum(tf.multiply(obj_mask, (1.0 - iou_values)))
 
         # Object confidence loss with focal loss
         pt = tf.where(tf.equal(obj_mask, 1.0), pred_conf, 1 - pred_conf)
         focal_weight = self.focal_alpha * tf.pow(1.0 - pt, self.focal_gamma)
-        obj_loss = tf.reduce_sum(obj_mask * focal_weight * tf.square(pred_conf - ciou_values))
+        obj_loss = tf.reduce_sum(obj_mask * focal_weight * tf.square(pred_conf - iou_values))
         
         noobj_loss = self.lambda_noobj * tf.reduce_sum(noobj_mask * tf.pow(pred_conf, self.focal_gamma) * tf.square(pred_conf))
         
         return box_loss, obj_loss, noobj_loss, obj_mask
+
+    def _negative_coordinate_penalty(self, y_pred: tf.Tensor):
+        """
+        Calculate a penalty for negative coordinates
+        
+        Args:
+            y_pred: Predicted tensor of shape (batch_size, S, S, B*5+C)
+        
+        Returns:
+            Tensor representing the coordinate negativity penalty
+        """
+        box_predictions = y_pred[..., :self.B*5]
+        
+        # Reshape to separate individual box components
+        boxes = tf.reshape(box_predictions, [-1, self.B, 5])
+        
+        x = boxes[..., 0]  # x-center
+        y = boxes[..., 1]  # y-center
+        w = boxes[..., 2]  # width
+        h = boxes[..., 3]  # height
+        
+        x1 = x - w/2
+        y1 = y - h/2
+        x2 = x + w/2
+        y2 = y + h/2
+        
+        x1_penalty = tf.maximum(0.0, -x1)
+        y1_penalty = tf.maximum(0.0, -y1)
+        x2_penalty = tf.maximum(0.0, -x2)
+        y2_penalty = tf.maximum(0.0, -y2)
+        
+        coordinate_penalty = (
+            tf.reduce_sum(x1_penalty**2) + 
+            tf.reduce_sum(y1_penalty**2) + 
+            tf.reduce_sum(x2_penalty**2) + 
+            tf.reduce_sum(y2_penalty**2)
+        )
+        
+        return coordinate_penalty

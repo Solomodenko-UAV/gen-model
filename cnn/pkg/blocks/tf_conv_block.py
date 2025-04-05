@@ -1,3 +1,4 @@
+import keras
 from keras.api.activations import leaky_relu
 from keras.api.layers import Conv2D, MaxPooling2D, LeakyReLU
 from keras import layers
@@ -27,7 +28,7 @@ class ConvBlock(Layer):
             kernel_size=(conv_filter_size, conv_filter_size),
             strides=(conv_stride, conv_stride),
             padding='same',
-            kernel_initializer='he_normal',
+            kernel_initializer=keras.initializers.Orthogonal(), # type: ignore
             bias_initializer='zeros',
             kernel_regularizer=l2(l2_lambda),
         )
@@ -51,7 +52,7 @@ class ConvBlock(Layer):
             strides=(conv_stride, conv_stride),
             padding='same',
             kernel_regularizer=l2(l2_lambda),
-            kernel_initializer='he_normal',
+            kernel_initializer=keras.initializers.Orthogonal(), # type: ignore
             bias_initializer='zeros',
         )
 

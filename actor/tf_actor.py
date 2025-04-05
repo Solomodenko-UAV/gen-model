@@ -6,7 +6,7 @@ from cnn.pkg.models.tf_tinysimmoYOLO import TFTinysimmoYOLOModel
 from cnn.pkg.layers.losses.tf_loss import YOLOLoss
 import matplotlib.patches as patches
 import matplotlib.pyplot as plt
-from keras.api.optimizers import Adadelta
+from keras.api.optimizers import Adadelta, Adam
 from metadata import visDrone
 
 
@@ -58,6 +58,7 @@ class TFYOLOActorPhoto():
 
     def print_results(self, image_path: str):
         box_coordinates, scores, classes = self.predict(image_path=image_path)
+        print("boxes coordinates: ", box_coordinates.numpy())
         box_coordinates = tf.convert_to_tensor(box_coordinates, dtype=tf.float32)
         scores = tf.convert_to_tensor(scores, dtype=tf.float32)
         classes = tf.convert_to_tensor(classes, dtype=tf.int64)
@@ -100,16 +101,15 @@ class TFYOLOActorPhoto():
         predictions = self.model.predict(image_downsampled)
 
         return self._bboxes_from_predictions(predictions, iou_threshold=iou_threshold)
-        
 
     def plot_training_history(self, history):
         # Get all metrics from the history object
         metrics = history.history
         epochs_range = range(1, len(metrics['loss']) + 1)
-        
+
         # Create a figure with subplots - one for loss, one for other metrics
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
-        
+
         # Plot loss
         ax1.plot(epochs_range, metrics['loss'], 'b-', label='Training Loss')
         if 'val_loss' in metrics:
@@ -119,7 +119,7 @@ class TFYOLOActorPhoto():
         ax1.set_ylabel('Loss')
         ax1.legend()
         ax1.grid(True)
-        
+
         # Plot other metrics if they exist (accuracy, mae, etc.)
         for metric in metrics:
             if metric != 'loss' and metric != 'val_loss':
@@ -128,16 +128,16 @@ class TFYOLOActorPhoto():
                 val_metric = f'val_{metric}'
                 if val_metric in metrics:
                     ax2.plot(epochs_range, metrics[val_metric], '--', label=f'Validation {metric}')
-        
+
         ax2.set_title('Training and Validation Metrics')
         ax2.set_xlabel('Epochs')
         ax2.set_ylabel('Value')
         ax2.legend()
         ax2.grid(True)
-        
+
         plt.tight_layout()
         plt.show()
-    
+
     def _compile_model(self, factor_H: float, factor_W: float, grid_cell_size: tuple):
         anchors = self.data_processor.find_out_anchors(factor_H, factor_W, grid_cell_size, self.model.B)
         self.model.set_anchors(tf.convert_to_tensor(anchors, dtype=tf.float32))
@@ -157,9 +157,11 @@ class TFYOLOActorPhoto():
         #     rho=0.95,
         #     epsilon=1e-7,
         # )
+        
+        optimizer = Adam(learning_rate=1e-4)
 
         self.model.compile(
-            optimizer='adadelta',
+            optimizer=optimizer, # type: ignore
             loss=loss,
             metrics=['accuracy'],
         )
@@ -179,15 +181,15 @@ class TFYOLOActorPhoto():
         """
 
         m = predictions.shape[0]
-        S = self.model.S
         B = self.model.B
-
-        cell_width = self.input_shape[1] / S
-        cell_height = self.input_shape[0] / S
 
         all_boxes = []
         all_scores = []
         all_classes = []
+        
+        grid_cell_w = self.input_shape[1] / self.model.S
+        grid_cell_h = self.input_shape[0] / self.model.S
+        anchor_dims = self.model.get_anchors()
 
         # Process each item in the batch
         for i in range(m):
@@ -205,11 +207,14 @@ class TFYOLOActorPhoto():
                 confidence = batch_pred[:, :, start_idx + 4]  # Confidence score
 
                 # absolute coordinates
-                abs_x = x * self.input_shape[1] 
-                abs_y = y * self.input_shape[0]  
-                abs_w = w * self.input_shape[1]
-                abs_h = h * self.input_shape[0]
-
+                abs_x = x * self.input_shape[1]
+                abs_y = y * self.input_shape[0]
+                # abs_w = w * grid_cell_w
+                # abs_h = h * grid_cell_h
+                
+                abs_w = tf.exp(w) * anchor_dims[box_idx, 0:1] * self.input_shape[1] / self.model.S
+                abs_h = tf.exp(h) * anchor_dims[box_idx, 1:2] * self.input_shape[0] / self.model.S
+                
                 # corner format [y1, x1, y2, x2]
                 y1 = abs_y - abs_h / 2
                 x1 = abs_x - abs_w / 2
@@ -241,6 +246,9 @@ class TFYOLOActorPhoto():
                     filtered_boxes, filtered_scores, max_output_size=100,
                     iou_threshold=iou_threshold
                 )
+                
+                if selected_indices.shape[0] == 0:
+                    continue
 
                 selected_boxes = tf.gather(filtered_boxes, selected_indices)
                 selected_scores = tf.gather(filtered_scores, selected_indices)

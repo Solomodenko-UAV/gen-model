@@ -1,4 +1,5 @@
 
+import keras
 import tensorflow as tf
 from cnn.pkg.blocks.tf_conv_block import ConvBlock
 from cnn.pkg.layers.yolo_output.tf_layer import TFYoloOutput
@@ -13,6 +14,15 @@ class TFTinysimmoYOLOModel(Model):
                  model_path: str,
                  S: int, B: int, C: int,
                  ):
+        """
+        Creates a new instance of the model
+
+        Args:
+            model_path (str): path to the model's weights & biases
+            S (int): number of grid cells
+            B (int): number of bounding boxes per grid cell
+            C (int): number of classes
+        """
         super(TFTinysimmoYOLOModel, self).__init__()
         self.model_path = model_path
         self.S = S
@@ -36,7 +46,7 @@ class TFTinysimmoYOLOModel(Model):
 
         self.fc_layer = Dense(
             units=256,
-            kernel_initializer='he_normal',
+            kernel_initializer=keras.initializers.Orthogonal(), # type: ignore
             bias_initializer='zeros',
             kernel_regularizer=l2(fc_l2_lambda),
         )

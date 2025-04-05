@@ -4,6 +4,7 @@ from keras import layers
 
 from keras.api.layers import Layer, Dense
 from keras.api.regularizers import l2
+import keras
 
 
 # checked. Should already be correct
@@ -20,8 +21,8 @@ class TFYoloOutput(Layer):
 
         self.fc = Dense(
             units=out_dim,
-            kernel_initializer='he_normal',
-            bias_initializer='zeros',
+            kernel_initializer=keras.initializers.Orthogonal(), # type: ignore
+            bias_initializer=keras.initializers.Constant(-2.0), # type: ignore
             kernel_regularizer=l2(l2_lambda),
         )
 

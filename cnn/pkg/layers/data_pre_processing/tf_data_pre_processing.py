@@ -26,6 +26,7 @@ class DataPreProcessor:
 
         image, downscaled_image = self.prepare_single_image(image_path=image_path, target_size=target_images_shape)
 
+        self.orig_image_shape = image.shape
         self.factor_H = image.shape[0] / target_images_shape[0]
         self.factor_W = image.shape[1] / target_images_shape[1]
         self.downscale_shape = target_images_shape
@@ -35,6 +36,7 @@ class DataPreProcessor:
     def load_annotations_for_training(self, S: int, B: int, C: int, anchors: tf.Tensor, annotation_file_name: str):
         annotation_path = os.path.join(self.annotations_folder, annotation_file_name)
         annotations = _extract_visDrone_annotations(annotation_path)
+
         downscaled_annotations = _downscale_annotations(annotations, self.factor_H, self.factor_W)
         downscaled_annotations = _cook_annotations(np.array(downscaled_annotations), self.downscale_shape, S, B, C, anchors)
 
@@ -212,7 +214,7 @@ def _cook_annotations(annotations: np.ndarray, model_input_img_shape: tuple, S: 
     categories = Y_norm[:, visDrone.category_idx].astype(np.int8)
     class_targets[np.arange(m), categories] = 1
     # smooth one-hot encoding vector
-    # class_targets = (1 - 1e-6) * class_targets + 1e-6 / C
+    class_targets = (1 - 1e-6) * class_targets + 1e-6 / C
 
     # construct output matrix - aka reshape annotations to the model output shape
     Y_target = np.zeros((S, S, B * 5 + C)).astype(np.float32)
