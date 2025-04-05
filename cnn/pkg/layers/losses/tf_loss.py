@@ -3,81 +3,149 @@ import numpy as np
 from keras.api.losses import Loss
 
 
-def calculate_iou(boxes1, boxes2):
+def calculate_iou(boxes1: tf.Tensor, boxes2: tf.Tensor, batch_size, S):
     """
-    Calculate IoU between boxes
+    Calculate IoU between boxes using TensorFlow operations
 
     Args:
         boxes1: tensor of shape (batch_size, S, S, 4) [x, y, w, h]
         boxes2: tensor of shape (batch_size, S, S, 4) [x, y, w, h]
+        batch_size: batch size
+        S: grid size
 
     Returns:
-        tensor of shape (batch_size, S, S, 1) containing IoU values
+        tensor of shape (batch_size, S, S) containing IoU values
     """
-    # Convert from center x, center y, width, height to xmin, ymin, xmax, ymax
-    boxes1_mins = boxes1[..., :2] - boxes1[..., 2:4] / 2.0
-    boxes1_maxes = boxes1[..., :2] + boxes1[..., 2:4] / 2.0
+    # Reshape to simplify operations
+    flat_shape = tf.constant([-1, 4], dtype=tf.int32)
+    boxes1_flat = tf.reshape(boxes1, flat_shape)
+    boxes2_flat = tf.reshape(boxes2, flat_shape)
 
-    boxes2_mins = boxes2[..., :2] - boxes2[..., 2:4] / 2.0
-    boxes2_maxes = boxes2[..., :2] + boxes2[..., 2:4] / 2.0
+    # Extract components using tf.slice
+    b1x = tf.slice(boxes1_flat, [0, 0], [-1, 1])
+    b1y = tf.slice(boxes1_flat, [0, 1], [-1, 1])
+    b1w = tf.slice(boxes1_flat, [0, 2], [-1, 1])
+    b1h = tf.slice(boxes1_flat, [0, 3], [-1, 1])
 
-    # Calculate intersections
-    intersect_mins = tf.maximum(boxes1_mins, boxes2_mins)
-    intersect_maxes = tf.minimum(boxes1_maxes, boxes2_maxes)
-    intersect_wh = tf.maximum(intersect_maxes - intersect_mins, 0.0)
+    b2x = tf.slice(boxes2_flat, [0, 0], [-1, 1])
+    b2y = tf.slice(boxes2_flat, [0, 1], [-1, 1])
+    b2w = tf.slice(boxes2_flat, [0, 2], [-1, 1])
+    b2h = tf.slice(boxes2_flat, [0, 3], [-1, 1])
 
-    intersect_area = intersect_wh[..., 0] * intersect_wh[..., 1]
-    boxes1_area = boxes1[..., 2] * boxes1[..., 3]
-    boxes2_area = boxes2[..., 2] * boxes2[..., 3]
+    # Convert to corner format
+    b1x1 = b1x - b1w/2
+    b1y1 = b1y - b1h/2
+    b1x2 = b1x + b1w/2
+    b1y2 = b1y + b1h/2
 
-    union_area = boxes1_area + boxes2_area - intersect_area
+    b2x1 = b2x - b2w/2
+    b2y1 = b2y - b2h/2
+    b2x2 = b2x + b2w/2
+    b2y2 = b2y + b2h/2
 
-    return tf.clip_by_value(intersect_area / (union_area + 1e-6), 0.0, 1.0)
+    # Calculate intersection area
+    x_left = tf.maximum(b1x1, b2x1)
+    y_top = tf.maximum(b1y1, b2y1)
+    x_right = tf.minimum(b1x2, b2x2)
+    y_bottom = tf.minimum(b1y2, b2y2)
+
+    width = tf.maximum(x_right - x_left, 0)
+    height = tf.maximum(y_bottom - y_top, 0)
+    intersection_area = tf.multiply(width, height)
+
+    # Calculate areas of each box
+    box1_area = tf.multiply(b1w, b1h)
+    box2_area = tf.multiply(b2w, b2h)
+
+    # Calculate union area
+    union_area = box1_area + box2_area - intersection_area
+
+    # Calculate IoU
+    iou = tf.clip_by_value(intersection_area / (union_area + 1e-7), 0.0, 1.0)
+    iou = tf.reshape(iou, [1, S, S]) # TODO: change 1 to batch_size
+
+    return iou
 
 
-def calculate_ciou(boxes1, boxes2):
+def calculate_ciou(boxes1: tf.Tensor, boxes2: tf.Tensor, batch_size, S):
     """
-    Calculate CIoU (Complete IoU) between boxes
+    Calculate CIoU (Complete IoU) between boxes using TensorFlow operations
 
     Args:
         boxes1: tensor of shape (batch_size, S, S, 4) [x, y, w, h]
         boxes2: tensor of shape (batch_size, S, S, 4) [x, y, w, h]
+        batch_size: batch size
+        S: grid size
 
     Returns:
-        tensor of shape (batch_size, S, S, 1) containing CIoU values
+        tensor of shape (batch_size, S, S) containing CIoU values
     """
     # Calculate IoU
-    iou = calculate_iou(boxes1, boxes2)
+    iou = calculate_iou(boxes1, boxes2, batch_size, S)
 
-    # Convert to corners format for distance calculation
-    boxes1_mins = boxes1[..., :2] - boxes1[..., 2:4] / 2.0
-    boxes1_maxes = boxes1[..., :2] + boxes1[..., 2:4] / 2.0
+    # Reshape to simplify operations
+    flat_shape = tf.constant([-1, 4], dtype=tf.int32)
+    boxes1_flat = tf.reshape(boxes1, flat_shape)
+    boxes2_flat = tf.reshape(boxes2, flat_shape)
 
-    boxes2_mins = boxes2[..., :2] - boxes2[..., 2:4] / 2.0
-    boxes2_maxes = boxes2[..., :2] + boxes2[..., 2:4] / 2.0
+    # Extract components using tf.slice
+    b1x = tf.slice(boxes1_flat, [0, 0], [-1, 1])
+    b1y = tf.slice(boxes1_flat, [0, 1], [-1, 1])
+    b1w = tf.slice(boxes1_flat, [0, 2], [-1, 1])
+    b1h = tf.slice(boxes1_flat, [0, 3], [-1, 1])
+
+    b2x = tf.slice(boxes2_flat, [0, 0], [-1, 1])
+    b2y = tf.slice(boxes2_flat, [0, 1], [-1, 1])
+    b2w = tf.slice(boxes2_flat, [0, 2], [-1, 1])
+    b2h = tf.slice(boxes2_flat, [0, 3], [-1, 1])
+
+    # Convert to corner format
+    b1x1 = b1x - b1w/2
+    b1y1 = b1y - b1h/2
+    b1x2 = b1x + b1w/2
+    b1y2 = b1y + b1h/2
+
+    b2x1 = b2x - b2w/2
+    b2y1 = b2y - b2h/2
+    b2x2 = b2x + b2w/2
+    b2y2 = b2y + b2h/2
 
     # Calculate the diagonal distance of the smallest enclosing box
-    enclose_mins = tf.minimum(boxes1_mins, boxes2_mins)
-    enclose_maxes = tf.maximum(boxes1_maxes, boxes2_maxes)
-    enclose_wh = tf.maximum(enclose_maxes - enclose_mins, 0.0)
+    min_x1 = tf.minimum(b1x1, b2x1)
+    min_y1 = tf.minimum(b1y1, b2y1)
+    max_x2 = tf.maximum(b1x2, b2x2)
+    max_y2 = tf.maximum(b1y2, b2y2)
+
+    enclose_w = max_x2 - min_x1
+    enclose_h = max_y2 - min_y1
 
     # Calculate the squared diagonal distance
-    c_squared = enclose_wh[..., 0] ** 2 + enclose_wh[..., 1] ** 2
+    c_squared = tf.square(enclose_w) + tf.square(enclose_h)
 
     # Calculate the center distance squared
-    center_dist_squared = tf.reduce_sum(tf.square(boxes1[..., :2] - boxes2[..., :2]), axis=-1)
+    center_x1 = b1x
+    center_y1 = b1y
+    center_x2 = b2x
+    center_y2 = b2y
 
-    # Calculate the aspect ratio consistency term
-    v = (4 / (np.pi ** 2)) * tf.square(
-        tf.atan(boxes1[..., 2] / (boxes1[..., 3] + 1e-6)) -
-        tf.atan(boxes2[..., 2] / (boxes2[..., 3] + 1e-6))
-    )
+    center_dist_squared = tf.square(center_x1 - center_x2) + tf.square(center_y1 - center_y2)
+
+    w1 = b1w
+    h1 = b1h
+    w2 = b2w
+    h2 = b2h
+
+    atan1 = tf.atan2(w1, h1 + 1e-6)
+    atan2 = tf.atan2(w2, h2 + 1e-6)
+    v = (4 / (np.pi ** 2)) * tf.square(atan1 - atan2)
 
     # Calculate the trade-off parameter
-    alpha = v / (1 - iou + v + 1e-6)
+    iou_flat = tf.reshape(iou, [-1, 1])
+    alpha = v / (1 - iou_flat + v + 1e-6)
 
-    # Calculate CIoU
-    ciou = iou - (center_dist_squared / (c_squared + 1e-6) + alpha * v)
+    ciou_flat = iou_flat - (center_dist_squared / (c_squared + 1e-6) + alpha * v)
+
+    ciou = tf.reshape(ciou_flat, [1, S, S]) # TODO: change 1 to batch_size
 
     return ciou
 
@@ -106,9 +174,9 @@ class YOLOLoss(Loss):
         self.focal_alpha = focal_alpha
         self.epsilon = 1e-6
 
-    def call(self, y_true, y_pred):
+    def call(self, y_true: tf.Tensor, y_pred: tf.Tensor):
         """
-        Calculate YOLO loss
+        Calculate YOLO loss using TensorFlow operations
 
         Args:
             y_true: true values - tensor of shape (batch_size, S, S, B*5+C)
@@ -117,68 +185,76 @@ class YOLOLoss(Loss):
         Returns:
             loss: scalar tensor
         """
-        batch_size = tf.shape(y_pred)[0]
+        batch_size = y_pred.shape[0]
 
-        # Initialize losses
-        box_loss = 0
-        obj_loss = 0
-        noobj_loss = 0
-        class_loss = 0
+        # Pre-allocate tensors for results
+        all_box_losses = []
+        all_obj_losses = []
+        all_noobj_losses = []
+        all_obj_masks = []
 
-        for b in range(self.B):
-            # Indices for this bounding box
+        # Use a Python loop to calculate losses for each bounding box (B is a small constant)
+        for b in range(self.B):  # This is a Python loop over a small constant, not a tensor
             box_idx = b * 5
-            x_idx, y_idx, w_idx, h_idx, conf_idx = [box_idx + i for i in range(5)]
+            box_loss, obj_loss, noobj_loss, obj_mask = self._compute_box_loss(
+                y_true, y_pred, box_idx, batch_size
+            )
+            all_box_losses.append(box_loss)
+            all_obj_losses.append(obj_loss)
+            all_noobj_losses.append(noobj_loss)
+            all_obj_masks.append(obj_mask)
 
-            # Extract object existence masks
-            obj_mask = y_true[..., conf_idx:conf_idx+1]
-            noobj_mask = 1.0 - obj_mask
+        # Sum the losses
+        total_box_loss = tf.add_n(all_box_losses)
+        total_obj_loss = tf.add_n(all_obj_losses)
+        total_noobj_loss = tf.add_n(all_noobj_losses)
 
-            # Extract predicted and target boxes
-            pred_boxes = y_pred[..., [x_idx, y_idx, w_idx, h_idx]]
-            true_boxes = y_true[..., [x_idx, y_idx, w_idx, h_idx]]
+        # Calculate cells with objects using tf.concat and tf.reduce_max
+        stacked_obj_masks = tf.concat(all_obj_masks, axis=-1)
+        cells_with_obj = tf.reduce_max(stacked_obj_masks, axis=-1, keepdims=True)
 
-            # Calculate CIoU
-            ciou = calculate_ciou(pred_boxes, true_boxes)
-            ciou = tf.expand_dims(ciou, -1)
-
-            # Coordinate loss for cells with objects
-            box_loss += self.lambda_coord * tf.reduce_sum(obj_mask * (1.0 - ciou))
-
-            # Confidence loss for cells with objects (using quality focal loss)
-            pred_conf = y_pred[..., conf_idx:conf_idx+1]
-
-            # Basic focal loss component
-            basic_focal = -((1.0 - pred_conf) ** self.focal_gamma) * tf.math.log(pred_conf + self.epsilon)
-
-            # Quality focal loss component
-            quality = ciou  # Use CIoU as quality
-            quality_diff = tf.abs(quality - pred_conf)
-            quality_focal = -quality * (quality_diff ** self.focal_gamma) * tf.math.log(pred_conf + self.epsilon)
-
-            # Combined confidence loss for objects
-            combined_obj_loss = (1 - self.focal_alpha) * basic_focal + self.focal_alpha * quality_focal
-            obj_loss += tf.reduce_sum(obj_mask * combined_obj_loss)
-
-            # No-object confidence loss with focal loss
-            noobj_focal_loss = -((pred_conf ** self.focal_gamma) * tf.math.log(1.0 - pred_conf + self.epsilon))
-            noobj_loss += self.lambda_noobj * tf.reduce_sum(noobj_mask * noobj_focal_loss)
-
-        # Class prediction loss (only for cells with objects)
+        # Class prediction loss
         class_idx = self.B * 5
-        pred_class = y_pred[..., class_idx:]
-        true_class = y_true[..., class_idx:]
+        pred_class = tf.slice(y_pred, [0, 0, 0, class_idx], [-1, -1, -1, self.C])
+        true_class = tf.slice(y_true, [0, 0, 0, class_idx], [-1, -1, -1, self.C])
 
-        # Calculate which cells have objects (for any box)
-        cells_with_obj = tf.reduce_max(tf.reshape(
-            y_true[..., 4:class_idx:5], [-1, self.S, self.S, self.B]
-        ), axis=-1, keepdims=True)
-
-        # Cross-entropy loss for classification
-        class_loss_per_cell = -tf.reduce_sum(true_class * tf.math.log(pred_class + self.epsilon), axis=-1, keepdims=True)
-        class_loss += tf.reduce_sum(cells_with_obj * class_loss_per_cell)
+        class_loss_per_cell = -tf.reduce_sum(
+            tf.multiply(true_class, tf.math.log(pred_class + self.epsilon)),
+            axis=-1, keepdims=True
+        )
+        class_loss = tf.reduce_sum(tf.multiply(cells_with_obj, class_loss_per_cell))
 
         # Calculate total loss
-        total_loss = (box_loss + obj_loss + noobj_loss + class_loss) / tf.cast(batch_size, tf.float32)
+        total_loss = (total_box_loss + total_obj_loss + total_noobj_loss + class_loss) / tf.cast(1, tf.float32) # TODO: change 1 to batch_size
 
         return total_loss
+
+    def _compute_box_loss(self, y_true: tf.Tensor, y_pred: tf.Tensor, box_idx: int, batch_size: int):
+        """
+        Compute loss for a single box index
+        """
+        # Extract boxes and confidence
+        pred_box = y_pred[..., box_idx:box_idx + 4]
+        true_box = y_true[..., box_idx:box_idx + 4]
+        pred_conf = y_pred[..., box_idx + 4:box_idx + 5]
+        true_conf = y_true[..., box_idx + 4:box_idx + 5]
+
+        # Create masks
+        obj_mask = true_conf
+        noobj_mask = 1.0 - obj_mask
+
+        # Calculate CIoU
+        ciou_values = calculate_ciou(pred_box, true_box, batch_size, self.S)
+        ciou_values = tf.expand_dims(ciou_values, -1)
+
+        # Box coordinate loss (only for cells with objects)
+        box_loss = self.lambda_coord * tf.reduce_sum(tf.multiply(obj_mask, (1.0 - ciou_values)))
+
+        # Object confidence loss with focal loss
+        pt = tf.where(tf.equal(obj_mask, 1.0), pred_conf, 1 - pred_conf)
+        focal_weight = self.focal_alpha * tf.pow(1.0 - pt, self.focal_gamma)
+        obj_loss = tf.reduce_sum(obj_mask * focal_weight * tf.square(pred_conf - ciou_values))
+        
+        noobj_loss = self.lambda_noobj * tf.reduce_sum(noobj_mask * tf.pow(pred_conf, self.focal_gamma) * tf.square(pred_conf))
+        
+        return box_loss, obj_loss, noobj_loss, obj_mask

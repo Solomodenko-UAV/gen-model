@@ -36,7 +36,7 @@ class TFTinysimmoYOLOModel(Model):
 
         self.fc_layer = Dense(
             units=256,
-            kernel_initializer='orthogonal',#'he_normal',
+            kernel_initializer='he_normal',
             bias_initializer='zeros',
             kernel_regularizer=l2(fc_l2_lambda),
         )
@@ -80,3 +80,16 @@ class TFTinysimmoYOLOModel(Model):
         x = self.output_layer.call(x)
 
         return x
+    
+    def build(self, input_shape):
+        """
+        build the model
+
+        Args:
+            input_shape (tuple): input shape of the model
+        """
+        if not hasattr(self, 'conv_blocks') or self.conv_blocks is None:
+            raise ValueError("Model must be created using create_new_model() before building.")
+        # Build the convolutional blocks
+    
+        super(TFTinysimmoYOLOModel, self).build(input_shape)

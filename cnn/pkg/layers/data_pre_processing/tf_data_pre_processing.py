@@ -1,4 +1,5 @@
 import os
+import re
 
 import numpy as np
 from metadata import visDrone
@@ -36,8 +37,8 @@ class DataPreProcessor:
         annotations = _extract_visDrone_annotations(annotation_path)
         downscaled_annotations = _downscale_annotations(annotations, self.factor_H, self.factor_W)
         downscaled_annotations = _cook_annotations(np.array(downscaled_annotations), self.downscale_shape, S, B, C, anchors)
-        
-        return downscaled_annotations   
+
+        return downscaled_annotations
 
     def find_out_anchors(self, factor_H: float, factor_W: float, grid_cell_size: tuple, B: int):
         annotation_files = os.listdir(self.annotations_folder)
@@ -63,12 +64,12 @@ class DataPreProcessor:
 
     def prepare_single_image(self, image_path: str, target_size: tuple):
         orig_image = self.load_single_image(image_path=image_path)
-        downscaled_image = tf.image.resize(orig_image, target_size, method='nearest', antialias=True)   
-        downscaled_image = tf.cast(downscaled_image, tf.float32) / 255.0
+        downscaled_image = tf.image.resize(orig_image, target_size, method='nearest')
+        downscaled_image = tf.image.convert_image_dtype(downscaled_image, dtype=tf.float32)
         downscaled_image = tf.image.per_image_standardization(downscaled_image)
         downscaled_image = tf.convert_to_tensor(downscaled_image, dtype=tf.float32)
 
-        return tf.convert_to_tensor(orig_image), tf.convert_to_tensor(downscaled_image)
+        return tf.convert_to_tensor(orig_image, dtype=tf.uint8), tf.convert_to_tensor(downscaled_image, dtype=tf.float32)
 
 
 def _extract_visDrone_annotations(file_path: str):
@@ -84,7 +85,7 @@ def _extract_visDrone_annotations(file_path: str):
     annotations = []
 
     for line in lines:
-        values = list(map(int, ''.join(c for c in line.strip().rstrip(',') if c.isdigit() or c == ',').split(',')))
+        values = list(map(float, re.findall(r'[-+]?\d*\.?\d+', line.strip())))
         if values[visDrone.object_existence_idx] == 0 or values[visDrone.category_idx] > 10:
             continue
 
@@ -108,12 +109,14 @@ def _downscale_annotations(annotations: list, factor_H: float, factor_W: float):
     downscaled_annotations = []
 
     for annotation in annotations:
-        annotation[visDrone.top_left_x_idx] = int(annotation[visDrone.top_left_x_idx] / factor_W)
-        annotation[visDrone.top_left_y_idx] = int(annotation[visDrone.top_left_y_idx] / factor_H)
-        annotation[visDrone.width_idx] = int(annotation[visDrone.width_idx] / factor_W)
-        annotation[visDrone.height_idx] = int(annotation[visDrone.height_idx] / factor_H)
+        new_ann = annotation.copy()
 
-        downscaled_annotations.append(annotation)
+        new_ann[visDrone.top_left_x_idx] = annotation[visDrone.top_left_x_idx] / factor_W
+        new_ann[visDrone.top_left_y_idx] = annotation[visDrone.top_left_y_idx] / factor_H
+        new_ann[visDrone.width_idx] = annotation[visDrone.width_idx] / factor_W
+        new_ann[visDrone.height_idx] = annotation[visDrone.height_idx] / factor_H
+
+        downscaled_annotations.append(new_ann)
 
     return downscaled_annotations
 
@@ -173,29 +176,6 @@ def _kmeans_iou(box, clusters):
     return res
 
 
-def _downscale_img(image: np.ndarray, new_shape: tuple):
-    """
-    Downscale the image to the new shape
-
-    Args:
-        image (np.ndarray): matrix of shape (height, width, num_channels), represents an image
-        new_shape (np.ndarray): tuple (new_height, new_width), represents the new shape of the image
-
-    Returns:
-        np.ndarray: downsampled image of shape(new_height, new_width, num_channels)
-    """
-
-    (new_height, new_width) = new_shape
-
-    factor_H = image.shape[0] // new_height
-    factor_W = image.shape[1] // new_width
-
-    image_cropped = image[:new_height * factor_H, :new_width * factor_W, :]
-    reshaped = image_cropped.reshape(new_height, factor_H, new_width, factor_W, image.shape[2])
-
-    return reshaped.mean(axis=(1, 3)).astype(np.uint8)
-
-
 def _cook_annotations(annotations: np.ndarray, model_input_img_shape: tuple, S: int, B: int, C: int, anchors: tf.Tensor):
     """
     convert list of annotations to the model output shape
@@ -232,31 +212,42 @@ def _cook_annotations(annotations: np.ndarray, model_input_img_shape: tuple, S: 
     categories = Y_norm[:, visDrone.category_idx].astype(np.int8)
     class_targets[np.arange(m), categories] = 1
     # smooth one-hot encoding vector
-    class_targets = (1 - 1e-6) * class_targets + 1e-6 / C
+    # class_targets = (1 - 1e-6) * class_targets + 1e-6 / C
 
     # construct output matrix - aka reshape annotations to the model output shape
     Y_target = np.zeros((S, S, B * 5 + C)).astype(np.float32)
+    used_anchors = np.zeros((S, S, B), dtype=bool)
 
     for i in range(m):
         cell_x = int(cells_x[i])
         cell_y = int(cells_y[i])
 
-        # bounding box target
-        bbox_target = np.array([
-            X_cells_offset[i],
-            Y_cells_offset[i],
-            Y_norm[i, visDrone.width_idx] / cell_width,
-            Y_norm[i, visDrone.height_idx] / cell_height,
-            1,
-        ])
+        gt_w = Y_norm[i, visDrone.width_idx] / cell_width
+        gt_h = Y_norm[i, visDrone.height_idx] / cell_height
 
-        true_center_offset = np.array([X_cells_offset[i], Y_cells_offset[i]])
-        
-        distances = np.linalg.norm(convert_to_numpy(anchors) - true_center_offset, axis=1)
-        best_bbox_slot = np.argmin(distances)
+        iou_scores = _kmeans_iou(np.array([gt_w, gt_h]), convert_to_numpy(anchors))
 
-        start_index = best_bbox_slot * 5
-        Y_target[cell_y, cell_x, start_index:start_index+5] = bbox_target
-        Y_target[cell_y, cell_x, B * 5:] = class_targets[i]
+        sorted_anchors = np.argsort(iou_scores)[::-1]
+        for anchor_idx in sorted_anchors:
+            if not used_anchors[cell_y, cell_x, anchor_idx]:
+                used_anchors[cell_y, cell_x, anchor_idx] = True
+                start_index = anchor_idx * 5
+
+                gt_w_transformed = np.log(gt_w / anchors[anchor_idx][0] + 1e-10)
+                gt_h_transformed = np.log(gt_h / anchors[anchor_idx][1] + 1e-10)
+
+                # bounding box target
+                bbox_target = np.array([
+                    X_cells_offset[i],
+                    Y_cells_offset[i],
+                    gt_w_transformed,
+                    gt_h_transformed,
+                    1,
+                ])
+
+                Y_target[cell_y, cell_x, start_index:start_index+5] = bbox_target
+                Y_target[cell_y, cell_x, B*5:] = class_targets[i]
+                break
+        # if no anchors left, the object is skipped
 
     return Y_target

@@ -1,5 +1,7 @@
 
 import platform
+
+import tensorflow as tf
 from cnn.pkg.models.tf_tinysimmoYOLO import TFTinysimmoYOLOModel
 from actor.tf_actor import TFYOLOActorPhoto
 
@@ -20,7 +22,8 @@ else:
     print("Running on an unsupported OS")
 
 
-model = TFTinysimmoYOLOModel(model_path='./model', S=4, B=2, C=11)
+# model = TFTinysimmoYOLOModel(model_path='./model', S=4, B=2, C=11)
+model = TFTinysimmoYOLOModel(model_path='./model', S=40, B=5, C=11)
 actor = TFYOLOActorPhoto(
     data_folder=data_folder,
     annotation_folder=annotation_folder,
@@ -31,8 +34,10 @@ actor = TFYOLOActorPhoto(
 
 
 def test_model():
+    # tf.config.run_functions_eagerly(True)
     actor.model.create_new_model()
-    actor.train_model(loops=1)
+    history = actor.train_model(loops=300)
+    actor.plot_training_history(history)
     actor.print_results(image_path=data_folder + '/0000006_00159_d_0000001.jpg')
 
 

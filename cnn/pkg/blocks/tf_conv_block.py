@@ -27,8 +27,8 @@ class ConvBlock(Layer):
             kernel_size=(conv_filter_size, conv_filter_size),
             strides=(conv_stride, conv_stride),
             padding='same',
-            kernel_initializer='orthogonal',#'he_normal',
-            bias_initializer='zeros',#'he_normal',
+            kernel_initializer='he_normal',
+            bias_initializer='zeros',
             kernel_regularizer=l2(l2_lambda),
         )
 
@@ -37,7 +37,7 @@ class ConvBlock(Layer):
         )
 
         self.activation1 = LeakyReLU(
-            alpha=0.1,
+            # negative_slope=0.1,
         )
 
         self.max_pool1 = MaxPooling2D(
@@ -51,7 +51,7 @@ class ConvBlock(Layer):
             strides=(conv_stride, conv_stride),
             padding='same',
             kernel_regularizer=l2(l2_lambda),
-            kernel_initializer='orthogonal',#'he_normal',
+            kernel_initializer='he_normal',
             bias_initializer='zeros',
         )
 
@@ -60,12 +60,7 @@ class ConvBlock(Layer):
         )
 
         self.activation2 = LeakyReLU(
-            alpha=0.1,
-        )
-
-        self.max_pool2 = MaxPooling2D(
-            pool_size=(maxpool_filter_size, maxpool_filter_size),
-            strides=(maxpool_stride, maxpool_stride),
+            # negative_slope=0.1,
         )
 
     def call(self, input):
@@ -77,6 +72,5 @@ class ConvBlock(Layer):
         X = self.conv2(X)
         X = self.batch_norm2(X)
         X = self.activation2(X)
-        X = self.max_pool2(X)
 
         return X

@@ -1,3 +1,4 @@
+from operator import index
 import numpy as np
 import tensorflow as tf
 from cnn.pkg.layers.data_pre_processing.tf_data_pre_processing import DataPreProcessor
@@ -57,6 +58,10 @@ class TFYOLOActorPhoto():
 
     def print_results(self, image_path: str):
         box_coordinates, scores, classes = self.predict(image_path=image_path)
+        box_coordinates = tf.convert_to_tensor(box_coordinates, dtype=tf.float32)
+        scores = tf.convert_to_tensor(scores, dtype=tf.float32)
+        classes = tf.convert_to_tensor(classes, dtype=tf.int64)
+
         if box_coordinates.shape[0] == 0:
             print("No objects detected.")
             return
@@ -75,8 +80,10 @@ class TFYOLOActorPhoto():
             y1, x1, y2, x2 = box_coordinates[i]
             rect = patches.Rectangle((x1, y1), x2 - x1, y2 - y1, linewidth=1, edgecolor='r', facecolor='none')
             ax.add_patch(rect)
-            label = visDrone.categories.get(classes[i], "Unknown")
+            label = visDrone.categories.get(int(classes[i].numpy()), "Unknown")
             ax.text(x1, y1, f'{label} {scores[i]:.2f}', color='white', fontsize=12,)
+
+        plt.show()
 
     def predict(self, image_path: str, iou_threshold: float = 0.5):
         """
@@ -93,10 +100,47 @@ class TFYOLOActorPhoto():
         predictions = self.model.predict(image_downsampled)
 
         return self._bboxes_from_predictions(predictions, iou_threshold=iou_threshold)
+        
 
+    def plot_training_history(self, history):
+        # Get all metrics from the history object
+        metrics = history.history
+        epochs_range = range(1, len(metrics['loss']) + 1)
+        
+        # Create a figure with subplots - one for loss, one for other metrics
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
+        
+        # Plot loss
+        ax1.plot(epochs_range, metrics['loss'], 'b-', label='Training Loss')
+        if 'val_loss' in metrics:
+            ax1.plot(epochs_range, metrics['val_loss'], 'r-', label='Validation Loss')
+        ax1.set_title('Training and Validation Loss')
+        ax1.set_xlabel('Epochs')
+        ax1.set_ylabel('Loss')
+        ax1.legend()
+        ax1.grid(True)
+        
+        # Plot other metrics if they exist (accuracy, mae, etc.)
+        for metric in metrics:
+            if metric != 'loss' and metric != 'val_loss':
+                ax2.plot(epochs_range, metrics[metric], label=f'Training {metric}')
+                # Check if there's a validation version of this metric
+                val_metric = f'val_{metric}'
+                if val_metric in metrics:
+                    ax2.plot(epochs_range, metrics[val_metric], '--', label=f'Validation {metric}')
+        
+        ax2.set_title('Training and Validation Metrics')
+        ax2.set_xlabel('Epochs')
+        ax2.set_ylabel('Value')
+        ax2.legend()
+        ax2.grid(True)
+        
+        plt.tight_layout()
+        plt.show()
+    
     def _compile_model(self, factor_H: float, factor_W: float, grid_cell_size: tuple):
         anchors = self.data_processor.find_out_anchors(factor_H, factor_W, grid_cell_size, self.model.B)
-        self.model.set_anchors(tf.convert_to_tensor(anchors))
+        self.model.set_anchors(tf.convert_to_tensor(anchors, dtype=tf.float32))
 
         loss = YOLOLoss(
             S=self.model.S,
@@ -154,18 +198,15 @@ class TFYOLOActorPhoto():
                 start_idx = box_idx * 5
 
                 # Extract predictions for this box
-                x = batch_pred[:, :, start_idx]      # Center x (relative to cell)
-                y = batch_pred[:, :, start_idx + 1]  # Center y (relative to cell)
+                x = batch_pred[:, :, start_idx]      # Already contains grid offset, normalized [0-1]
+                y = batch_pred[:, :, start_idx + 1]  # Already contains grid offset, normalized [0-1]
                 w = batch_pred[:, :, start_idx + 2]  # Width (normalized)
                 h = batch_pred[:, :, start_idx + 3]  # Height (normalized)
-                confidence = batch_pred[:, :, start_idx + 4]  # Confidence
-
-                grid_y, grid_x = tf.meshgrid(tf.range(S, dtype=tf.float32),
-                                             tf.range(S, dtype=tf.float32))
+                confidence = batch_pred[:, :, start_idx + 4]  # Confidence score
 
                 # absolute coordinates
-                abs_x = (x + grid_x) * cell_width
-                abs_y = (y + grid_y) * cell_height
+                abs_x = x * self.input_shape[1] 
+                abs_y = y * self.input_shape[0]  
                 abs_w = w * self.input_shape[1]
                 abs_h = h * self.input_shape[0]
 
@@ -219,20 +260,18 @@ class TFYOLOActorPhoto():
             # empty tensors if no boxes were found
             return tf.zeros((0, 4)), tf.zeros((0,)), tf.zeros((0,), dtype=tf.int64)
 
-    def _upscale_bboxes(self, bboxes: np.ndarray):
+    def _upscale_bboxes(self, bboxes: tf.Tensor):
         """
         Upscale the bounding boxes to the original image size.
 
         Args:
-            bboxes (np.ndarray): bounding boxes of shape (m, 4) [y1, x1, y2, x2]
+            bboxes (tf.Tensor): bounding boxes of shape (m, 4) [y1, x1, y2, x2]
 
         Returns:
-            np.ndarray: upscaled bounding boxes of shape (m, 4)
+            tf.Tensor: upscaled bounding boxes of shape (m, 4)
         """
         # TODO: this will only work for one image or if all images are of the same size (that's not the case with visDrone dataset)
-        bboxes[:, 0] *= self.factor_H
-        bboxes[:, 1] *= self.factor_W
-        bboxes[:, 2] *= self.factor_H
-        bboxes[:, 3] *= self.factor_W
+        scaling_factors = tf.constant([self.factor_H, self.factor_W, self.factor_H, self.factor_W], dtype=bboxes.dtype)
+        bboxes = tf.multiply(bboxes, scaling_factors)
 
         return bboxes
