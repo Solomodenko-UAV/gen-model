@@ -9,8 +9,8 @@ from actor.tf_actor import TFYOLOActorPhoto
 data_folder = ''
 annotation_folder = ''
 if platform.system() == "Windows":
-    data_folder = 'C:\\Projects\\uav\\real_data\\VisDrone2019-DET-test-dev\\images'
-    annotation_folder = "C:\\Projects\\uav\\real_data\\VisDrone2019-DET-test-dev\\annotations"
+    data_folder = 'C:\\Projects\\uav\\real_data\\VisDrone2019-DET-train\\images'
+    annotation_folder = "C:\\Projects\\uav\\real_data\\VisDrone2019-DET-train\\annotations"
     # data_folder = 'C:\\Projects\\uav\\real_data\\VisDrone2019-DET-train\\images'
     # annotation_folder = "C:\\Projects\\uav\\real_data\\VisDrone2019-DET-train\\labels"
 elif platform.system() == "Darwin":
@@ -35,10 +35,10 @@ actor = TFYOLOActorPhoto(
 def test_model():
     # tf.config.run_functions_eagerly(True)
     actor.model.create_new_model()
-    history = actor.train_model(loops=1000)
+    history = actor.train_model(loops=1)
     actor.plot_training_history(history)
     actor.print_results(
-        image_path=data_folder + '/0000001_02999_d_0000005.jpg',
+        image_path=data_folder + '/0000008_03499_d_0000043.jpg',
         score_threshold=0.5,
         iou_threshold=0.5,
     )

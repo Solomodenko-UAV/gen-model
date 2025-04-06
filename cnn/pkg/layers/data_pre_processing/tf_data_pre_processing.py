@@ -11,11 +11,69 @@ class DataPreProcessor:
     def __init__(self, images_folder: str, annotations_folder: str, data_idx: int = 0):
         self.images_folder = images_folder
         self.annotations_folder = annotations_folder
-        self.data_idx = data_idx
 
         self.orig_image_shape = {}
         self.factors_H = {}
         self.factors_W = {}
+
+    def create_dataset(self, target_images_shape: tuple, S: int, B: int, C: int, anchors: tf.Tensor, batch_size: int = 32):
+        """
+        Create a dataset for training
+
+        Args:
+            target_images_shape (tuple): shape of the image that the model accepts (height, width)
+            S (int): number of grid cells in the image
+            B (int): number of bounding boxes per cell
+            C (int): number of classes
+            anchors (tf.Tensor): normalized ([0, 1]) anchors for the model - matrix of shape (B, 2), represents the anchors for the model
+            batch_size (int, optional): batch size. Defaults to 32.
+
+        Returns:
+            tf.data.Dataset: dataset for training
+        """
+        def process_image_and_annotation(image_path: str, annotation_path: str):
+            """
+            Process image and annotation
+
+            Args:
+                image_path (str): path to the image
+                annotation_path (str): path to the annotation file
+                target_size (tuple): target size of the image
+
+            Returns:
+                tuple: processed image and annotation
+            """
+            img, downscaled_image = self.prepare_single_image(image_path=image_path, target_size=target_images_shape)
+
+            factor_H = img.shape[0] / target_images_shape[0]
+            factor_W = img.shape[1] / target_images_shape[1]
+
+            annotations_list = extract_visDrone_annotations_from_file(annotation_path)
+
+            cooked_annotations = []
+            for annotations in annotations_list:
+                downscaled_annotations = _downscale_annotations(annotations, factor_H, factor_W)
+                downscaled_annotations = _cook_annotations(np.array(downscaled_annotations), self.downscale_shape, S, B, C, anchors)
+                cooked_annotations.append(downscaled_annotations)
+
+            return downscaled_image, np.array(cooked_annotations)
+
+        image_files = tf.data.Dataset.list_files(os.path.join(self.images_folder, '*.jpg'))
+
+        dataset = image_files.map(
+            lambda x: tf.py_function(
+                func=process_image_and_annotation,
+                inp=[x, tf.strings.regex_replace(x, '.jpg', '.txt')],
+                Tout=[tf.float32, tf.float32]),
+
+            num_parallel_calls=tf.data.AUTOTUNE
+        )
+        
+        dataset = dataset.batch(batch_size)
+        # dataset = dataset.prefetch(buffer_size=tf.data.AUTOTUNE)
+        dataset = dataset.shuffle(buffer_size=1000)
+        
+        return dataset
 
     def load_images_batch_for_training(self, target_images_shape: tuple, start_idx: int = 0, end_index: int = -1):
         """
@@ -53,6 +111,8 @@ class DataPreProcessor:
         return np.array(cooked_annotations)
 
     def find_out_anchors(self, grid_cell_size: tuple, B: int):
+        tf.print("Finding out anchors...")
+
         annotations_list = self.extract_visDrone_annotations()
 
         if len(annotations_list) != len(self.factors_H):
@@ -69,27 +129,31 @@ class DataPreProcessor:
 
         return default_anchors
 
-    def read_multiple_images(self, images_dirs: list):
+    def read_multiple_images(self, images_dirs: list, start_idx: int = 0, end_idx: int = -1):
         images = []
 
         counter = 0
         for image_dir in images_dirs:
             for image_file in os.listdir(image_dir):
+                if counter < start_idx:
+                    counter += 1
+                    continue
+
+                if end_idx != -1 and counter >= end_idx:
+                    break
+
                 image_full_path = os.path.join(image_dir, image_file)
+
                 if os.path.isfile(image_full_path):
                     img = tf.io.decode_image(tf.io.read_file(image_full_path), channels=3)
                     images.append(img)
-                    counter += 1
+
+                counter += 1
 
         return images
 
     def prepare_multiple_images(self, images_dir: str, target_size: tuple, start_idx: int = 0, end_idx: int = -1):
-        images = self.read_multiple_images(images_dirs=[images_dir])
-
-        if end_idx == -1:
-            end_idx = len(images)
-
-        images = images[start_idx:end_idx]
+        images = self.read_multiple_images(images_dirs=[images_dir], start_idx=start_idx, end_idx=end_idx)
 
         downscaled_images = []
         for idx, image in enumerate(images):

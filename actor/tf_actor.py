@@ -24,13 +24,47 @@ class TFYOLOActorPhoto():
         self.mini_batch_size = mini_batch_size
         self.input_shape = model_input_img_res
 
-    def train_model(self, loops: int = 1):
-        downscaled_images = self.data_processor.load_images_batch_for_training(self.input_shape)
-
-        epochs = loops * tf.shape(downscaled_images)[0] 
-        
+    def train_model2(self, loops: int = 1, images_per_epoch: int = 10):
         grid_cell_size = (self.input_shape[0] / self.model.S, self.input_shape[1] / self.model.S)
         self._compile_model(grid_cell_size)
+        
+        dataset = self.data_processor.create_dataset(
+            target_images_shape=self.input_shape,
+            batch_size=images_per_epoch,
+            S=self.model.S,
+            B=self.model.B,
+            C=self.model.C,
+            anchors=self.model.get_anchors(),
+        )
+        
+        epochs = loops * images_per_epoch        
+
+        for epoch in range(epochs):
+            print(f"Epoch {epoch+1}/{epochs}")
+            
+            for batch, (images, targets) in enumerate(dataset):
+                with tf.GradientTape() as tape:
+                    predictions = self.model(images, training=True)
+                    loss = self.model.loss_fn(targets, predictions)
+                
+                # Compute gradients
+                gradients = tape.gradient(loss, model.trainable_variables)
+                
+                # Apply gradients
+                model.optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+                
+                # Optional: print progress
+                print(f"Batch {batch}, Loss: {loss.numpy()}")
+
+        return history
+
+    def train_model(self, loops: int = 1, images_per_epoch: int = 10):
+        grid_cell_size = (self.input_shape[0] / self.model.S, self.input_shape[1] / self.model.S)
+        self._compile_model(grid_cell_size)
+        
+        downscaled_images = self.data_processor.load_images_batch_for_training(self.input_shape)
+
+        epochs = loops * tf.shape(downscaled_images)[0]        
 
         downscaled_annotations = self.data_processor.load_annotations_for_training(
             S=self.model.S,
