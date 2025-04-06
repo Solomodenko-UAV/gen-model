@@ -62,93 +62,9 @@ def calculate_iou(boxes1: tf.Tensor, boxes2: tf.Tensor, batch_size, S):
 
     # Calculate IoU
     iou = tf.clip_by_value(intersection_area / (union_area + 1e-7), 0.0, 1.0)
-    iou = tf.reshape(iou, [1, S, S]) # TODO: change 1 to batch_size
+    iou = tf.reshape(iou, [batch_size, S, S])
 
     return iou
-
-
-def calculate_ciou(boxes1: tf.Tensor, boxes2: tf.Tensor, batch_size, S):
-    """
-    Calculate CIoU (Complete IoU) between boxes using TensorFlow operations
-
-    Args:
-        boxes1: tensor of shape (batch_size, S, S, 4) [x, y, w, h]
-        boxes2: tensor of shape (batch_size, S, S, 4) [x, y, w, h]
-        batch_size: batch size
-        S: grid size
-
-    Returns:
-        tensor of shape (batch_size, S, S) containing CIoU values
-    """
-    # Calculate IoU
-    iou = calculate_iou(boxes1, boxes2, batch_size, S)
-
-    # Reshape to simplify operations
-    flat_shape = tf.constant([-1, 4], dtype=tf.int32)
-    boxes1_flat = tf.reshape(boxes1, flat_shape)
-    boxes2_flat = tf.reshape(boxes2, flat_shape)
-
-    # Extract components using tf.slice
-    b1x = tf.slice(boxes1_flat, [0, 0], [-1, 1])
-    b1y = tf.slice(boxes1_flat, [0, 1], [-1, 1])
-    b1w = tf.slice(boxes1_flat, [0, 2], [-1, 1])
-    b1h = tf.slice(boxes1_flat, [0, 3], [-1, 1])
-
-    b2x = tf.slice(boxes2_flat, [0, 0], [-1, 1])
-    b2y = tf.slice(boxes2_flat, [0, 1], [-1, 1])
-    b2w = tf.slice(boxes2_flat, [0, 2], [-1, 1])
-    b2h = tf.slice(boxes2_flat, [0, 3], [-1, 1])
-
-    # Convert to corner format
-    b1x1 = b1x - b1w/2
-    b1y1 = b1y - b1h/2
-    b1x2 = b1x + b1w/2
-    b1y2 = b1y + b1h/2
-
-    b2x1 = b2x - b2w/2
-    b2y1 = b2y - b2h/2
-    b2x2 = b2x + b2w/2
-    b2y2 = b2y + b2h/2
-
-    # Calculate the diagonal distance of the smallest enclosing box
-    min_x1 = tf.minimum(b1x1, b2x1)
-    min_y1 = tf.minimum(b1y1, b2y1)
-    max_x2 = tf.maximum(b1x2, b2x2)
-    max_y2 = tf.maximum(b1y2, b2y2)
-
-    enclose_w = max_x2 - min_x1
-    enclose_h = max_y2 - min_y1
-
-    # Calculate the squared diagonal distance
-    c_squared = tf.square(enclose_w) + tf.square(enclose_h)
-
-    # Calculate the center distance squared
-    center_x1 = b1x
-    center_y1 = b1y
-    center_x2 = b2x
-    center_y2 = b2y
-
-    center_dist_squared = tf.square(center_x1 - center_x2) + tf.square(center_y1 - center_y2)
-
-    w1 = b1w
-    h1 = b1h
-    w2 = b2w
-    h2 = b2h
-
-    atan1 = tf.atan2(w1, h1 + 1e-6)
-    atan2 = tf.atan2(w2, h2 + 1e-6)
-    v = (4 / (np.pi ** 2)) * tf.square(atan1 - atan2)
-
-    # Calculate the trade-off parameter
-    iou_flat = tf.reshape(iou, [-1, 1])
-    alpha = v / (1 - iou_flat + v + 1e-6)
-
-    ciou_flat = iou_flat - (center_dist_squared / (c_squared + 1e-6) + alpha * v)
-
-    ciou = tf.reshape(ciou_flat, [1, S, S]) # TODO: change 1 to batch_size
-
-    return ciou
-
 
 class YOLOLoss(Loss):
     def __init__(self, S, B, C, lambda_coord=10.0, lambda_noobj=0.5, focal_gamma=2.0, focal_alpha=0.25):
@@ -185,7 +101,7 @@ class YOLOLoss(Loss):
         Returns:
             loss: scalar tensor
         """
-        batch_size = y_pred.shape[0]
+        batch_size = tf.shape(y_pred)[0]
 
         # Pre-allocate tensors for results
         all_box_losses = []
@@ -225,7 +141,7 @@ class YOLOLoss(Loss):
         class_loss = tf.reduce_sum(tf.multiply(cells_with_obj, class_loss_per_cell))
 
         # Calculate total loss
-        total_loss = (total_box_loss + total_obj_loss + total_noobj_loss + class_loss) / tf.cast(1, tf.float32) # TODO: change 1 to batch_size
+        total_loss = (total_box_loss + total_obj_loss + total_noobj_loss + class_loss) / tf.cast(batch_size, tf.float32)  # type: ignore
         total_loss += 0.15 * self._negative_coordinate_penalty(y_pred)  
         
         return total_loss

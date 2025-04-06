@@ -13,46 +13,54 @@ class DataPreProcessor:
         self.annotations_folder = annotations_folder
         self.data_idx = data_idx
 
-    def load_images_for_training(self, target_images_shape: tuple):
+        self.orig_image_shape = {}
+        self.factors_H = {}
+        self.factors_W = {}
+
+    def load_images_batch_for_training(self, target_images_shape: tuple, start_idx: int = 0, end_index: int = -1):
         """
         Load data for training
         Returns:
-            tuple: original image, downscaled image
+            list of images (tf.Tensor): batch of images - matrix of shape (m, height, width, num_channels), represents a batch of m images
         """
-        # TODO: currently only for single image
-        image_files = os.listdir(self.images_folder)
-        image_file = image_files[0]
-        image_path = os.path.join(self.images_folder, image_file)
 
-        image, downscaled_image = self.prepare_single_image(image_path=image_path, target_size=target_images_shape)
-
-        self.orig_image_shape = image.shape
-        self.factor_H = image.shape[0] / target_images_shape[0]
-        self.factor_W = image.shape[1] / target_images_shape[1]
+        downscaled_images = self.prepare_multiple_images(self.images_folder, target_images_shape, start_idx, end_index)
         self.downscale_shape = target_images_shape
 
-        return image, downscaled_image
+        return tf.convert_to_tensor(downscaled_images, dtype=tf.float32)
 
-    def load_annotations_for_training(self, S: int, B: int, C: int, anchors: tf.Tensor, annotation_file_name: str):
-        annotation_path = os.path.join(self.annotations_folder, annotation_file_name)
-        annotations = _extract_visDrone_annotations(annotation_path)
+    def load_annotations_for_training(self, S: int, B: int, C: int, anchors: tf.Tensor):
+        """
+        Load annotations for training
 
-        downscaled_annotations = _downscale_annotations(annotations, self.factor_H, self.factor_W)
-        downscaled_annotations = _cook_annotations(np.array(downscaled_annotations), self.downscale_shape, S, B, C, anchors)
+        Raises:
+            ValueError: _description_
 
-        return downscaled_annotations
+        Returns:
+            cooked_annotations (np.ndarray): annotations for the model - matrix of shape (m, S, S, B*5+C), represents a batch of m images
+        """
+        annotations_list = self.extract_visDrone_annotations()
 
-    def find_out_anchors(self, factor_H: float, factor_W: float, grid_cell_size: tuple, B: int):
-        annotation_files = os.listdir(self.annotations_folder)
+        if len(annotations_list) != len(self.factors_H):
+            raise ValueError("Number of annotations does not match the number of images")
+
+        cooked_annotations = []
+        for idx, annotations in enumerate(annotations_list):
+            downscaled_annotations = _downscale_annotations(annotations, self.factors_H[idx], self.factors_W[idx])
+            downscaled_annotations = _cook_annotations(np.array(downscaled_annotations), self.downscale_shape, S, B, C, anchors)
+            cooked_annotations.append(downscaled_annotations)
+
+        return np.array(cooked_annotations)
+
+    def find_out_anchors(self, grid_cell_size: tuple, B: int):
+        annotations_list = self.extract_visDrone_annotations()
+
+        if len(annotations_list) != len(self.factors_H):
+            raise ValueError("Number of annotations does not match the number of images")
+
         boxes = []
-
-        for annotation_file in annotation_files:
-            annotations = _extract_visDrone_annotations(os.path.join(self.annotations_folder, annotation_file))
-            if len(annotations) == 0:
-                continue
-
-            downscaled_annotations = _downscale_annotations(annotations, factor_H, factor_W)
-
+        for idx, annotations in enumerate(annotations_list):
+            downscaled_annotations = _downscale_annotations(annotations, self.factors_H[idx], self.factors_W[idx])
             for annotation in downscaled_annotations:
                 boxes.append([annotation[visDrone.width_idx] / grid_cell_size[1],
                               annotation[visDrone.height_idx] / grid_cell_size[0]])
@@ -60,6 +68,44 @@ class DataPreProcessor:
         default_anchors = _kmeans(np.array(boxes), k=B, dist=np.median, max_iter=300)
 
         return default_anchors
+
+    def read_multiple_images(self, images_dirs: list):
+        images = []
+
+        counter = 0
+        for image_dir in images_dirs:
+            for image_file in os.listdir(image_dir):
+                image_full_path = os.path.join(image_dir, image_file)
+                if os.path.isfile(image_full_path):
+                    img = tf.io.decode_image(tf.io.read_file(image_full_path), channels=3)
+                    images.append(img)
+                    counter += 1
+
+        return images
+
+    def prepare_multiple_images(self, images_dir: str, target_size: tuple, start_idx: int = 0, end_idx: int = -1):
+        images = self.read_multiple_images(images_dirs=[images_dir])
+
+        if end_idx == -1:
+            end_idx = len(images)
+
+        images = images[start_idx:end_idx]
+
+        downscaled_images = []
+        for idx, image in enumerate(images):
+            downscaled_image = tf.image.resize(image, target_size, method='nearest')
+            downscaled_image = tf.image.convert_image_dtype(downscaled_image, dtype=tf.float32)
+            downscaled_image = tf.image.per_image_standardization(downscaled_image)
+            downscaled_images.append(tf.convert_to_tensor(downscaled_image, dtype=tf.float32))
+
+            factor_H = image.shape[0] / target_size[0]
+            factor_W = image.shape[1] / target_size[1]
+
+            self.factors_H[idx] = factor_H
+            self.factors_W[idx] = factor_W
+            self.orig_image_shape[idx] = image.shape
+
+        return downscaled_images
 
     def load_single_image(self, image_path: str):
         return tf.io.decode_image(tf.io.read_file(image_path), channels=3)
@@ -73,8 +119,24 @@ class DataPreProcessor:
 
         return tf.convert_to_tensor(orig_image, dtype=tf.uint8), tf.convert_to_tensor(downscaled_image, dtype=tf.float32)
 
+    def extract_visDrone_annotations(self):
+        """
+        Extract annotations from the predefined folder
 
-def _extract_visDrone_annotations(file_path: str):
+        Returns:
+            list: list of dictionaries, each dictionary contains the annotation for a
+        """
+        annotation_files = os.listdir(self.annotations_folder)
+        annotations_list = []
+
+        for annotation_file in annotation_files:
+            annotations = extract_visDrone_annotations_from_file(os.path.join(self.annotations_folder, annotation_file))
+            annotations_list.append(annotations)
+
+        return annotations_list
+
+
+def extract_visDrone_annotations_from_file(file_path: str):
     """
     Extract annotations from the file
 
@@ -91,6 +153,7 @@ def _extract_visDrone_annotations(file_path: str):
         if values[visDrone.object_existence_idx] == 0 or values[visDrone.category_idx] > 10:
             continue
 
+        values[visDrone.category_idx] -= 1  # convert to 0-based index
         annotations.append(values)
 
     return annotations
@@ -214,7 +277,7 @@ def _cook_annotations(annotations: np.ndarray, model_input_img_shape: tuple, S: 
     categories = Y_norm[:, visDrone.category_idx].astype(np.int8)
     class_targets[np.arange(m), categories] = 1
     # smooth one-hot encoding vector
-    class_targets = (1 - 1e-6) * class_targets + 1e-6 / C
+    # class_targets = (1 - 1e-6) * class_targets + 1e-6 / C
 
     # construct output matrix - aka reshape annotations to the model output shape
     Y_target = np.zeros((S, S, B * 5 + C)).astype(np.float32)

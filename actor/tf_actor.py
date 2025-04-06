@@ -1,7 +1,7 @@
 from operator import index
 import numpy as np
 import tensorflow as tf
-from cnn.pkg.layers.data_pre_processing.tf_data_pre_processing import DataPreProcessor
+from cnn.pkg.layers.data_pre_processing.tf_data_pre_processing import DataPreProcessor, extract_visDrone_annotations_from_file
 from cnn.pkg.models.tf_tinysimmoYOLO import TFTinysimmoYOLOModel
 from cnn.pkg.layers.losses.tf_loss import YOLOLoss
 import matplotlib.patches as patches
@@ -25,30 +25,23 @@ class TFYOLOActorPhoto():
         self.input_shape = model_input_img_res
 
     def train_model(self, loops: int = 1):
-        orig_image, downscaled_image = self.data_processor.load_images_for_training(self.input_shape)
+        downscaled_images = self.data_processor.load_images_batch_for_training(self.input_shape)
 
-        epochs = loops * 1  # since it's a single image
-
-        factor_H = orig_image.shape[0] / self.input_shape[0]
-        factor_W = orig_image.shape[1] / self.input_shape[1]
+        epochs = loops * tf.shape(downscaled_images)[0] 
+        
         grid_cell_size = (self.input_shape[0] / self.model.S, self.input_shape[1] / self.model.S)
-        self._compile_model(factor_H, factor_W, grid_cell_size)
-
-        X = tf.expand_dims(downscaled_image, axis=0)  # Add batch dimension (1, ...)
+        self._compile_model(grid_cell_size)
 
         downscaled_annotations = self.data_processor.load_annotations_for_training(
             S=self.model.S,
             B=self.model.B,
             C=self.model.C,
             anchors=self.model.get_anchors(),
-            annotation_file_name='0000006_00159_d_0000001.txt'
         )
 
-        Y_true = tf.expand_dims(downscaled_annotations, axis=0)  # add batch dimension (1, ...)
-
         history = self.model.fit(
-            x=X,
-            y=Y_true,
+            x=downscaled_images,
+            y=downscaled_annotations,
             batch_size=self.mini_batch_size,
             epochs=epochs,
             verbose='1',
@@ -56,18 +49,34 @@ class TFYOLOActorPhoto():
 
         return history
 
-    def print_results(self, image_path: str):
-        box_coordinates, scores, classes = self.predict(image_path=image_path)
-        print("boxes coordinates: ", box_coordinates.numpy())
-        box_coordinates = tf.convert_to_tensor(box_coordinates, dtype=tf.float32)
-        scores = tf.convert_to_tensor(scores, dtype=tf.float32)
-        classes = tf.convert_to_tensor(classes, dtype=tf.int64)
+    def print_bboxes(self, image_path: str, annotation_path: str):
+        image = self.data_processor.load_single_image(image_path)
+        annotations = extract_visDrone_annotations_from_file(annotation_path)
+        _, ax = plt.subplots(1, 1, figsize=(12, 8))
+        plt.axis('off')
 
+        ax.imshow(image)
+
+        for i in range(len(annotations)):
+            annotation = annotations[i]
+            x1 = annotation[visDrone.top_left_x_idx]
+            y1 = annotation[visDrone.top_left_y_idx]
+            w = annotation[visDrone.width_idx]
+            h = annotation[visDrone.height_idx]
+            label = visDrone.categories.get(int(annotation[visDrone.category_idx]), "Unknown")
+
+            rect = patches.Rectangle((x1, y1), w, h, linewidth=1, edgecolor='r', facecolor='none')
+            ax.add_patch(rect)
+            ax.text(x1, y1, f'{label}', color='white', fontsize=12,)
+
+        plt.show()
+
+    def print_results(self, image_path: str, score_threshold: float = 0.1, iou_threshold: float = 0.5):
+        box_coordinates, scores, classes = self.predict(image_path=image_path, score_threshold=score_threshold, iou_threshold=iou_threshold)
         if box_coordinates.shape[0] == 0:
             print("No objects detected.")
             return
 
-        box_coordinates = self._upscale_bboxes(box_coordinates)
         image = self.data_processor.load_single_image(image_path=image_path)
 
         y1, x1, y2, x2 = box_coordinates[0]
@@ -86,21 +95,39 @@ class TFYOLOActorPhoto():
 
         plt.show()
 
-    def predict(self, image_path: str, iou_threshold: float = 0.5):
+    def predict(self, image_path: str, iou_threshold: float = 0.5, score_threshold: float = 0.1):
         """
         predict for the single image
+
+        Args:
+            image_path: path to the image
+            iou_threshold: IoU threshold for non-max suppression
+            score_threshold: score threshold for filtering boxes
+
+        Returns:
+            boxes_coordinates: tensor of shape (num_boxes, 4) [y1, x1, y2, x2]
+            boxes_scores: tensor of shape (num_boxes,)
+            boxes_classes: tensor of shape (num_boxes,)
         """
 
         img, image_downsampled = self.data_processor.prepare_single_image(image_path, self.input_shape)
 
-        self.factor_H = img.shape[0] / self.input_shape[0]
-        self.factor_W = img.shape[1] / self.input_shape[1]
+        factor_H = img.shape[0] / self.input_shape[0]
+        factor_W = img.shape[1] / self.input_shape[1]
 
         image_downsampled = tf.expand_dims(image_downsampled, axis=0)  # add batch dimension (1, H, W, C)
 
         predictions = self.model.predict(image_downsampled)
 
-        return self._bboxes_from_predictions(predictions, iou_threshold=iou_threshold)
+        box_coordinates, scores, classes = self._bboxes_from_predictions(predictions, iou_threshold=iou_threshold, score_threshold=score_threshold)
+
+        box_coordinates = tf.convert_to_tensor(box_coordinates, dtype=tf.float32)
+        scores = tf.convert_to_tensor(scores, dtype=tf.float32)
+        classes = tf.convert_to_tensor(classes, dtype=tf.int64)
+
+        bboxes = self._upscale_bboxes(box_coordinates, factor_H, factor_W)
+
+        return bboxes, scores, classes
 
     def plot_training_history(self, history):
         # Get all metrics from the history object
@@ -138,8 +165,8 @@ class TFYOLOActorPhoto():
         plt.tight_layout()
         plt.show()
 
-    def _compile_model(self, factor_H: float, factor_W: float, grid_cell_size: tuple):
-        anchors = self.data_processor.find_out_anchors(factor_H, factor_W, grid_cell_size, self.model.B)
+    def _compile_model(self, grid_cell_size: tuple):
+        anchors = self.data_processor.find_out_anchors(grid_cell_size, self.model.B)
         self.model.set_anchors(tf.convert_to_tensor(anchors, dtype=tf.float32))
 
         loss = YOLOLoss(
@@ -157,11 +184,11 @@ class TFYOLOActorPhoto():
         #     rho=0.95,
         #     epsilon=1e-7,
         # )
-        
+
         optimizer = Adam(learning_rate=1e-4)
 
         self.model.compile(
-            optimizer=optimizer, # type: ignore
+            optimizer=optimizer,  # type: ignore
             loss=loss,
             metrics=['accuracy'],
         )
@@ -186,9 +213,7 @@ class TFYOLOActorPhoto():
         all_boxes = []
         all_scores = []
         all_classes = []
-        
-        grid_cell_w = self.input_shape[1] / self.model.S
-        grid_cell_h = self.input_shape[0] / self.model.S
+
         anchor_dims = self.model.get_anchors()
 
         # Process each item in the batch
@@ -209,12 +234,10 @@ class TFYOLOActorPhoto():
                 # absolute coordinates
                 abs_x = x * self.input_shape[1]
                 abs_y = y * self.input_shape[0]
-                # abs_w = w * grid_cell_w
-                # abs_h = h * grid_cell_h
-                
+
                 abs_w = tf.exp(w) * anchor_dims[box_idx, 0:1] * self.input_shape[1] / self.model.S
                 abs_h = tf.exp(h) * anchor_dims[box_idx, 1:2] * self.input_shape[0] / self.model.S
-                
+
                 # corner format [y1, x1, y2, x2]
                 y1 = abs_y - abs_h / 2
                 x1 = abs_x - abs_w / 2
@@ -246,7 +269,7 @@ class TFYOLOActorPhoto():
                     filtered_boxes, filtered_scores, max_output_size=100,
                     iou_threshold=iou_threshold
                 )
-                
+
                 if selected_indices.shape[0] == 0:
                     continue
 
@@ -268,7 +291,7 @@ class TFYOLOActorPhoto():
             # empty tensors if no boxes were found
             return tf.zeros((0, 4)), tf.zeros((0,)), tf.zeros((0,), dtype=tf.int64)
 
-    def _upscale_bboxes(self, bboxes: tf.Tensor):
+    def _upscale_bboxes(self, bboxes: tf.Tensor, factor_H: float, factor_W: float):
         """
         Upscale the bounding boxes to the original image size.
 
@@ -278,8 +301,7 @@ class TFYOLOActorPhoto():
         Returns:
             tf.Tensor: upscaled bounding boxes of shape (m, 4)
         """
-        # TODO: this will only work for one image or if all images are of the same size (that's not the case with visDrone dataset)
-        scaling_factors = tf.constant([self.factor_H, self.factor_W, self.factor_H, self.factor_W], dtype=bboxes.dtype)
+        scaling_factors = tf.constant([factor_H, factor_W, factor_H, factor_W], dtype=bboxes.dtype)
         bboxes = tf.multiply(bboxes, scaling_factors)
 
         return bboxes

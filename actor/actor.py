@@ -662,6 +662,7 @@ class YOLOActorPhoto():
         cell_height = self.model_input_img_res[1] / S
 
         boxes = cp.zeros((m, S, S, B, 6))
+        
 
         for i in range(m):
             for row in range(S):
@@ -677,12 +678,12 @@ class YOLOActorPhoto():
                         # x = sigmoid(tx)
                         # y = sigmoid(ty)
 
-                        x_center_abs = (col + tx) * cell_width
-                        y_center_abs = (row + ty) * cell_height
+                        x_center_abs = tx * self.model_input_img_res[1]
+                        y_center_abs = ty * self.model_input_img_res[0]
 
                         # already scaled by anchor in feed_forward
-                        w_abs = tw * cell_width
-                        h_abs = th * cell_height
+                        w_abs = cp.exp(tw) * self.default_bounding_box_offsets[b][0] * self.model_input_img_res[1] / S
+                        h_abs = cp.exp(th) * self.default_bounding_box_offsets[b][1] * self.model_input_img_res[0] / S
 
                         x1 = x_center_abs - w_abs / 2
                         y1 = y_center_abs - h_abs / 2
