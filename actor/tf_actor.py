@@ -1,5 +1,4 @@
-from operator import index
-import numpy as np
+from re import X
 import tensorflow as tf
 from cnn.pkg.layers.data_pre_processing.tf_data_pre_processing import DataPreProcessor, extract_visDrone_annotations_from_file
 from cnn.pkg.models.tf_tinysimmoYOLO import TFTinysimmoYOLOModel
@@ -19,65 +18,44 @@ class TFYOLOActorPhoto():
                  mini_batch_size: int
                  ):
 
-        self.data_processor = DataPreProcessor(images_folder=data_folder, annotations_folder=annotation_folder)
+        self.data_processor = DataPreProcessor(images_folder=data_folder, annotations_folder=annotation_folder, target_images_shape=model_input_img_res)
         self.model = model
         self.mini_batch_size = mini_batch_size
         self.input_shape = model_input_img_res
 
-    def train_model2(self, loops: int = 1, images_per_epoch: int = 10):
+    def train_model(self, loops: int = 1, batch_size: int = 32):
+        """
+        Train the model with a TensorFlow Dataset.
+
+        Args:
+            loops (int): Number of epochs to train
+            images_per_epoch (int, optional): Total number of images to use per epoch. 
+                                            If None, uses the entire dataset.
+            batch_size (int): Number of images per batch
+
+        Returns:
+            Training history
+        """
         grid_cell_size = (self.input_shape[0] / self.model.S, self.input_shape[1] / self.model.S)
         self._compile_model(grid_cell_size)
-        
+
         dataset = self.data_processor.create_dataset(
             target_images_shape=self.input_shape,
-            batch_size=images_per_epoch,
             S=self.model.S,
             B=self.model.B,
             C=self.model.C,
             anchors=self.model.get_anchors(),
+            batch_size=batch_size,
         )
-        
-        epochs = loops * images_per_epoch        
 
-        for epoch in range(epochs):
-            print(f"Epoch {epoch+1}/{epochs}")
-            
-            for batch, (images, targets) in enumerate(dataset):
-                with tf.GradientTape() as tape:
-                    predictions = self.model(images, training=True)
-                    loss = self.model.loss_fn(targets, predictions)
-                
-                # Compute gradients
-                gradients = tape.gradient(loss, model.trainable_variables)
-                
-                # Apply gradients
-                model.optimizer.apply_gradients(zip(gradients, model.trainable_variables))
-                
-                # Optional: print progress
-                print(f"Batch {batch}, Loss: {loss.numpy()}")
-
-        return history
-
-    def train_model(self, loops: int = 1, images_per_epoch: int = 10):
-        grid_cell_size = (self.input_shape[0] / self.model.S, self.input_shape[1] / self.model.S)
-        self._compile_model(grid_cell_size)
-        
-        downscaled_images = self.data_processor.load_images_batch_for_training(self.input_shape)
-
-        epochs = loops * tf.shape(downscaled_images)[0]        
-
-        downscaled_annotations = self.data_processor.load_annotations_for_training(
-            S=self.model.S,
-            B=self.model.B,
-            C=self.model.C,
-            anchors=self.model.get_anchors(),
-        )
+        # for i, (images, labels) in enumerate(dataset):
+        #     print(f"Batch {i}:")
+        #     print("Images shape:", images.shape)
+        #     print("Labels shape:", labels.shape)
 
         history = self.model.fit(
-            x=downscaled_images,
-            y=downscaled_annotations,
-            batch_size=self.mini_batch_size,
-            epochs=epochs,
+            dataset,
+            epochs=loops,
             verbose='1',
         )
 
@@ -89,7 +67,7 @@ class TFYOLOActorPhoto():
         _, ax = plt.subplots(1, 1, figsize=(12, 8))
         plt.axis('off')
 
-        ax.imshow(image)
+        ax.imshow(image)  # type: ignore
 
         for i in range(len(annotations)):
             annotation = annotations[i]
@@ -118,7 +96,7 @@ class TFYOLOActorPhoto():
         _, ax = plt.subplots(1, 1, figsize=(12, 8))
         plt.axis('off')
 
-        ax.imshow(image)
+        ax.imshow(image)  # type: ignore
 
         for i in range(len(box_coordinates)):
             y1, x1, y2, x2 = box_coordinates[i]

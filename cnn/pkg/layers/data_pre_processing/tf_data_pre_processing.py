@@ -1,3 +1,4 @@
+import glob
 import os
 import re
 
@@ -8,9 +9,10 @@ from keras.api.ops import convert_to_numpy
 
 
 class DataPreProcessor:
-    def __init__(self, images_folder: str, annotations_folder: str, data_idx: int = 0):
+    def __init__(self, images_folder: str, annotations_folder: str, target_images_shape: tuple):
         self.images_folder = images_folder
         self.annotations_folder = annotations_folder
+        self.downscale_shape = target_images_shape
 
         self.orig_image_shape = {}
         self.factors_H = {}
@@ -18,61 +20,64 @@ class DataPreProcessor:
 
     def create_dataset(self, target_images_shape: tuple, S: int, B: int, C: int, anchors: tf.Tensor, batch_size: int = 32):
         """
-        Create a dataset for training
-
-        Args:
-            target_images_shape (tuple): shape of the image that the model accepts (height, width)
-            S (int): number of grid cells in the image
-            B (int): number of bounding boxes per cell
-            C (int): number of classes
-            anchors (tf.Tensor): normalized ([0, 1]) anchors for the model - matrix of shape (B, 2), represents the anchors for the model
-            batch_size (int, optional): batch size. Defaults to 32.
-
-        Returns:
-            tf.data.Dataset: dataset for training
+        Create a dataset for training with proper shape handling
         """
-        def process_image_and_annotation(image_path: str, annotation_path: str):
-            """
-            Process image and annotation
+        def process_image_and_annotation(image_path, annotation_path):
+            image_path = image_path.numpy().decode('utf-8')
+            annotation_path = annotation_path.numpy().decode('utf-8')
 
-            Args:
-                image_path (str): path to the image
-                annotation_path (str): path to the annotation file
-                target_size (tuple): target size of the image
+            orig_image, processed_image = self.prepare_single_image(
+                image_path=image_path,
+                target_size=target_images_shape
+            )
 
-            Returns:
-                tuple: processed image and annotation
-            """
-            img, downscaled_image = self.prepare_single_image(image_path=image_path, target_size=target_images_shape)
-
-            factor_H = img.shape[0] / target_images_shape[0]
-            factor_W = img.shape[1] / target_images_shape[1]
+            orig_height, orig_width = orig_image.shape[:2]  # type: ignore
+            factor_H = orig_height / target_images_shape[0]
+            factor_W = orig_width / target_images_shape[1]
 
             annotations_list = extract_visDrone_annotations_from_file(annotation_path)
+            downscaled_annotations = _downscale_annotations_list(annotations_list, factor_H, factor_W)
+            cooked_annotations = _cook_annotations(
+                np.array(downscaled_annotations),
+                self.downscale_shape,
+                S, B, C, anchors
+            )
 
-            cooked_annotations = []
-            for annotations in annotations_list:
-                downscaled_annotations = _downscale_annotations(annotations, factor_H, factor_W)
-                downscaled_annotations = _cook_annotations(np.array(downscaled_annotations), self.downscale_shape, S, B, C, anchors)
-                cooked_annotations.append(downscaled_annotations)
+            cooked_annotations = np.array(cooked_annotations, dtype=np.float32)
 
-            return downscaled_image, np.array(cooked_annotations)
+            return processed_image, cooked_annotations
 
-        image_files = tf.data.Dataset.list_files(os.path.join(self.images_folder, '*.jpg'))
+        image_files = glob.glob(os.path.join(self.images_folder, '*.jpg'))
+        annotation_paths = [
+            os.path.join(self.annotations_folder, os.path.splitext(os.path.basename(f))[0] + '.txt')
+            for f in image_files
+        ]
 
-        dataset = image_files.map(
-            lambda x: tf.py_function(
+        valid_pairs = [(img, ann) for img, ann in zip(image_files, annotation_paths)
+                       if os.path.exists(ann)]
+        image_paths, annotation_paths = zip(*valid_pairs) if valid_pairs else ([], [])
+
+        if not image_paths:
+            raise ValueError("No valid image-annotation pairs found")
+
+        dataset = tf.data.Dataset.from_tensor_slices((list(image_paths), list(annotation_paths)))
+
+        def map_wrapper(img_path, ann_path):
+            processed_img, cooked_ann = tf.py_function(
                 func=process_image_and_annotation,
-                inp=[x, tf.strings.regex_replace(x, '.jpg', '.txt')],
-                Tout=[tf.float32, tf.float32]),
+                inp=[img_path, ann_path],
+                Tout=[tf.float32, tf.float32]
+            )  # type: ignore
+            processed_img.set_shape(target_images_shape + (3,))  # (height, width, channels)
+            cooked_ann.set_shape((S, S, C + B * 5))           # (grid_y, grid_x, C + B * 5)
+            return processed_img, cooked_ann
 
-            num_parallel_calls=tf.data.AUTOTUNE
-        )
-        
-        dataset = dataset.batch(batch_size)
-        # dataset = dataset.prefetch(buffer_size=tf.data.AUTOTUNE)
-        dataset = dataset.shuffle(buffer_size=1000)
-        
+        # Configure dataset pipeline
+        dataset = dataset.map(map_wrapper, num_parallel_calls=tf.data.AUTOTUNE)
+        dataset = dataset.shuffle(buffer_size=1024, reshuffle_each_iteration=True)
+        dataset = dataset.batch(batch_size, drop_remainder=False)
+        dataset = dataset.prefetch(buffer_size=tf.data.AUTOTUNE)
+
         return dataset
 
     def load_images_batch_for_training(self, target_images_shape: tuple, start_idx: int = 0, end_index: int = -1):
@@ -83,7 +88,6 @@ class DataPreProcessor:
         """
 
         downscaled_images = self.prepare_multiple_images(self.images_folder, target_images_shape, start_idx, end_index)
-        self.downscale_shape = target_images_shape
 
         return tf.convert_to_tensor(downscaled_images, dtype=tf.float32)
 
@@ -104,7 +108,7 @@ class DataPreProcessor:
 
         cooked_annotations = []
         for idx, annotations in enumerate(annotations_list):
-            downscaled_annotations = _downscale_annotations(annotations, self.factors_H[idx], self.factors_W[idx])
+            downscaled_annotations = _downscale_annotations_list(annotations, self.factors_H[idx], self.factors_W[idx])
             downscaled_annotations = _cook_annotations(np.array(downscaled_annotations), self.downscale_shape, S, B, C, anchors)
             cooked_annotations.append(downscaled_annotations)
 
@@ -114,13 +118,15 @@ class DataPreProcessor:
         tf.print("Finding out anchors...")
 
         annotations_list = self.extract_visDrone_annotations()
+        if len(self.factors_H) == 0:
+            self.find_out_factors_H_W()
 
         if len(annotations_list) != len(self.factors_H):
             raise ValueError("Number of annotations does not match the number of images")
 
         boxes = []
         for idx, annotations in enumerate(annotations_list):
-            downscaled_annotations = _downscale_annotations(annotations, self.factors_H[idx], self.factors_W[idx])
+            downscaled_annotations = _downscale_annotations_list(annotations, self.factors_H[idx], self.factors_W[idx])
             for annotation in downscaled_annotations:
                 boxes.append([annotation[visDrone.width_idx] / grid_cell_size[1],
                               annotation[visDrone.height_idx] / grid_cell_size[0]])
@@ -199,6 +205,20 @@ class DataPreProcessor:
 
         return annotations_list
 
+    def find_out_factors_H_W(self):
+        files = os.listdir(self.images_folder)
+        for idx, file in enumerate(files):
+            image_path = os.path.join(self.images_folder, file)
+            orig_image = self.load_single_image(image_path=image_path)
+            orig_image = tf.convert_to_tensor(orig_image, dtype=tf.uint8)
+
+            factor_H = orig_image.shape[0] / self.downscale_shape[0]
+            factor_W = orig_image.shape[1] / self.downscale_shape[1]
+
+            self.factors_H[idx] = factor_H
+            self.factors_W[idx] = factor_W
+            self.orig_image_shape[idx] = orig_image.shape
+
 
 def extract_visDrone_annotations_from_file(file_path: str):
     """
@@ -228,6 +248,28 @@ def _downscale_annotations(annotations: list, factor_H: float, factor_W: float):
     Downscale the annotations to the input image size
 
     Args:
+        annotations (np.ndarray): annotations - matrix of shape (m, 8), represents a batch of m annotations
+        factor_H (float): height factor
+        factor_W (float): width factor
+
+    Returns:
+        np.ndarray: downscaled annotations - matrix of shape (m, 8), represents a batch of m annotations
+    """
+    new_ann = annotations.copy()
+
+    new_ann[visDrone.top_left_x_idx] = annotations[visDrone.top_left_x_idx] / factor_W
+    new_ann[visDrone.top_left_y_idx] = annotations[visDrone.top_left_y_idx] / factor_H
+    new_ann[visDrone.width_idx] = annotations[visDrone.width_idx] / factor_W
+    new_ann[visDrone.height_idx] = annotations[visDrone.height_idx] / factor_H
+
+    return new_ann
+
+
+def _downscale_annotations_list(annotations: list[list], factor_H: float, factor_W: float):
+    """
+    Downscale the annotations to the input image size
+
+    Args:
         annotations (list): list of annotations
         factor_H (float): height factor
         factor_W (float): width factor
@@ -239,13 +281,7 @@ def _downscale_annotations(annotations: list, factor_H: float, factor_W: float):
 
     for annotation in annotations:
         new_ann = annotation.copy()
-
-        new_ann[visDrone.top_left_x_idx] = annotation[visDrone.top_left_x_idx] / factor_W
-        new_ann[visDrone.top_left_y_idx] = annotation[visDrone.top_left_y_idx] / factor_H
-        new_ann[visDrone.width_idx] = annotation[visDrone.width_idx] / factor_W
-        new_ann[visDrone.height_idx] = annotation[visDrone.height_idx] / factor_H
-
-        downscaled_annotations.append(new_ann)
+        downscaled_annotations.append(_downscale_annotations(new_ann, factor_H, factor_W))
 
     return downscaled_annotations
 
@@ -316,7 +352,7 @@ def _cook_annotations(annotations: np.ndarray, model_input_img_shape: tuple, S: 
         anchors (np.ndarray): normalized ([0, 1]) anchors for the model - matrix of shape (B, 2), represents the anchors for the model
 
     Returns:
-        Y_target (np.ndarray): true values - matrix of shape (S, S, B*5+C), represents a batch of m images
+        Y_target (np.ndarray): true values - matrix of shape (S, S, B*5+C)
     """
     m = annotations.shape[0]
 

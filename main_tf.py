@@ -35,18 +35,18 @@ actor = TFYOLOActorPhoto(
 def test_model():
     # tf.config.run_functions_eagerly(True)
     actor.model.create_new_model()
-    history = actor.train_model(loops=1)
+    history = actor.train_model(loops=300, batch_size=2)
     actor.plot_training_history(history)
     actor.print_results(
-        image_path=data_folder + '/0000008_03499_d_0000043.jpg',
+        image_path=data_folder + '/0000001_02999_d_0000005.jpg',
         score_threshold=0.5,
         iou_threshold=0.5,
     )
     
 def debug():
     actor.print_bboxes(
-        image_path=data_folder + '/0000006_00159_d_0000001.jpg',
-        annotation_path=annotation_folder + '/0000006_00159_d_0000001.txt',
+        image_path=data_folder + '/0000001_02999_d_0000005.jpg',
+        annotation_path=annotation_folder + '/0000001_02999_d_0000005.txt',
     )
 
 # debug()
