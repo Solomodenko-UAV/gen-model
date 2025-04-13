@@ -79,10 +79,10 @@ class TFTinysimmoYOLOModel(Model):
         Args:
             anchors (tf.Tensor): anchors for the model
         """
-        self.output_layer.anchors = anchors
+        self.output_layer.anchors = anchors  # type: ignore
 
     def get_anchors(self):
-        return self.output_layer.anchors
+        return self.output_layer.anchors  # type: ignore
 
     def call(self, images: tf.Tensor):
         """
@@ -171,10 +171,10 @@ class TFTinysimmoYOLOModel(Model):
             compile=False,
         )
 
-        self.conv_blocks = model.conv_blocks
-        self.flatten = model.flatten
-        self.fc_layer = model.fc_layer
-        self.output_layer = model.output_layer
-        self.S = model.S
-        self.B = model.B
-        self.C = model.C
+        self.conv_blocks = model.conv_blocks  # type: ignore
+        self.flatten = model.flatten  # type: ignore
+        self.fc_layer = model.fc_layer  # type: ignore
+        self.output_layer = model.output_layer  # type: ignore
+        self.S = model.S  # type: ignore
+        self.B = model.B  # type: ignore
+        self.C = model.C  # type: ignore

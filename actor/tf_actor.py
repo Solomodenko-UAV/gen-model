@@ -1,6 +1,6 @@
 from re import X
 import tensorflow as tf
-from cnn.pkg.layers.data_pre_processing.tf_data_pre_processing import DataPreProcessor, extract_visDrone_annotations_from_file
+from cnn.pkg.layers.data_pre_processing.tf_data_pre_processing_gpu import DataPreProcessor, extract_visDrone_annotations_from_file
 from cnn.pkg.models.tf_tinysimmoYOLO import TFTinysimmoYOLOModel
 from cnn.pkg.layers.losses.tf_loss import YOLOLoss
 import matplotlib.patches as patches
@@ -56,7 +56,7 @@ class TFYOLOActorPhoto():
         history = self.model.fit(
             dataset,
             epochs=loops,
-            verbose='1',
+            verbose=1, # type: ignore
         )
 
         return history

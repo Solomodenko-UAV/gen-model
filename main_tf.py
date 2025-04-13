@@ -1,7 +1,6 @@
 
 import platform
 
-import keras
 import tensorflow as tf
 from cnn.pkg.layers.yolo_output.tf_layer import TFYoloOutput
 from cnn.pkg.models.tf_tinysimmoYOLO import TFTinysimmoYOLOModel
@@ -12,7 +11,7 @@ data_folder = ''
 annotation_folder = ''
 if platform.system() == "Windows":
     data_folder = 'C:\\Projects\\uav\\real_data\\VisDrone2019-DET-train\\images'
-    annotation_folder = "C:\\Projects\\uav\\real_data\\VisDrone2019-DET-train\\annotations"
+    annotation_folder = "C:\\Projects\\uav\\real_data\\VisDrone2019-DET-train\\labels"
     # data_folder = 'C:\\Projects\\uav\\real_data\\VisDrone2019-DET-train\\images'
     # annotation_folder = "C:\\Projects\\uav\\real_data\\VisDrone2019-DET-train\\labels"
 elif platform.system() == "Darwin":
@@ -20,11 +19,17 @@ elif platform.system() == "Darwin":
     # annotation_folder = "/Users/kana/Projects/my_own/pet_projects/VisDrone2019-DET-train/labels"
     data_folder = '/Users/kana/Projects/my_own/pet_projects/gen-model/data/VisDrone2019-DET-val/testdata/images'
     annotation_folder = "/Users/kana/Projects/my_own/pet_projects/gen-model/data/VisDrone2019-DET-val/testdata/annotations"
+elif platform.system() == "Linux":
+    data_folder = '/mnt/c/Projects/uav/real_data/VisDrone2019-DET-train/images'
+    annotation_folder = "/mnt/c/Projects/uav/real_data/VisDrone2019-DET-train/labels"
 else:
+    print(platform.system())
     print("Running on an unsupported OS")
 
-
-model = TFTinysimmoYOLOModel(S=4, B=2, C=11)
+S = 11
+B = 2
+C = 11
+model = TFTinysimmoYOLOModel(S, B, C)
 actor = TFYOLOActorPhoto(
     data_folder=data_folder,
     annotation_folder=annotation_folder,
@@ -33,50 +38,25 @@ actor = TFYOLOActorPhoto(
     mini_batch_size=10
 )
 
-
 def test_model():
     # tf.config.run_functions_eagerly(True)
     
-    # actor.model.create_new_model()
-    # history = actor.train_model(loops=300, batch_size=2)
-    # actor.model.save_model(folder_path='./model', model_name='tinysimmo_yolo')
-    # actor.plot_training_history(history)
-    actor.model.load_model(folder_path='./model', model_name='tinysimmo_yolo')
+    actor.model.create_new_model()
+    # loops = 200
+    loops = 1
+    batch_size = 16
+    history = actor.train_model(loops, batch_size)
+    actor.model.save_model(folder_path='./trained_models', model_name=f"tinysimmo_yolo_loops={loops}_batch_size={batch_size}_B={B}_C={C}_S={S}")
+    actor.plot_training_history(history)
+    # actor.model.load_model(folder_path='./model', model_name='tinysimmo_yolo')
     actor.print_results(
-        image_path=data_folder + '/0000001_02999_d_0000005.jpg',
+        image_path=data_folder + '/0000002_00005_d_0000014.jpg',
         score_threshold=0.5,
         iou_threshold=0.5,
     )
     
 def debug():
-    # layer = TFYoloOutput(
-    #     S=4,
-    #     B=2,
-    #     C=11,
-    #     anchors=tf.convert_to_tensor([0.5, 0.5]),
-    # )
-    
-    # keras.models.save_model(
-    #     layer,
-    #     'model_test.keras',
-    #     overwrite=True,
-    # )
-    
-    # keras.models.load_model(
-    #     'model_test.keras',
-    #     custom_objects={
-    #         'TFYoloOutput': TFYoloOutput,
-    #     }
-    # )
-    
-    model.save_model(
-        folder_path='./model',
-        model_name='tinysimmo_yolo',
-    )
-    model.load_mzodel(
-        folder_path='./model',
-        model_name='tinysimmo_yolo',
-    )
+    pass
     
 
 # debug()
