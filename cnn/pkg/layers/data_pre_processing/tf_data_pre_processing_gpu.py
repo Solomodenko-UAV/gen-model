@@ -12,9 +12,8 @@ class DataPreProcessor(tf.Module):
         self.annotations_folder = annotations_folder
         self.downscale_shape = target_images_shape
 
-        self.orig_image_shape = tf.TensorArray(dtype=tf.int32, size=0, dynamic_size=True)
-        self.factors_H = tf.TensorArray(dtype=tf.int32, size=0, dynamic_size=True)
-        self.factors_W = tf.TensorArray(dtype=tf.int32, size=0, dynamic_size=True)
+        self.factors_H = tf.convert_to_tensor([])
+        self.factors_W = tf.convert_to_tensor([])
 
     def create_dataset(self, target_images_shape: tuple, S: int, B: int, C: int, anchors: tf.Tensor, batch_size: int = 32):
         tf.print("Creating dataset...")
@@ -49,14 +48,12 @@ class DataPreProcessor(tf.Module):
         image_paths, annotation_paths = zip(*valid_pairs)
         dataset = tf.data.Dataset.from_tensor_slices((list(image_paths), list(annotation_paths)))
 
-        # dataset = dataset.map(lambda img, ann: process_image_and_annotation(img, ann),
-        #                       num_parallel_calls=tf.data.AUTOTUNE)
         dataset = dataset.map(lambda img, ann: process_image_and_annotation(img, ann),
-                              num_parallel_calls=1)
+                              num_parallel_calls=tf.data.AUTOTUNE)
+
         dataset = dataset.shuffle(buffer_size=len(valid_pairs), reshuffle_each_iteration=True)
         dataset = dataset.batch(batch_size, drop_remainder=False)
-        # dataset = dataset.prefetch(tf.data.AUTOTUNE)
-        dataset = dataset.prefetch(1)
+        dataset = dataset.prefetch(tf.data.AUTOTUNE)
         return dataset
 
     def find_out_anchors(self, grid_cell_size: tuple, B: int):
@@ -77,27 +74,26 @@ class DataPreProcessor(tf.Module):
         if self.factors_H.shape[0] == 0:
             self.find_out_factors_H_W()
 
-        if annotations_list.shape[0] != self.factors_H.shape[0]: # if number of annotation butches does not match number of images
+        if annotations_list.shape[0] != self.factors_H.shape[0]:  # if number of annotation butches does not match number of images
             raise ValueError("Number of annotations does not match the number of images")
-
-        annotations_tensor = tf.convert_to_tensor(annotations_list, dtype=tf.float32)
 
         # Downscale annotations using tf.map_fn
         def downscale_fn(idx):
             return _downscale_annotations(
-                annotations_tensor[idx],
+                annotations_list[idx].to_tensor(),
                 self.factors_H[idx],
                 self.factors_W[idx]
             )
 
         downscaled_annotations = tf.map_fn(
             downscale_fn,
-            tf.range(len(annotations_list)),
+            tf.range(annotations_list.shape[0]),
             fn_output_signature=tf.TensorSpec(shape=(None, 6), dtype=tf.float32)
         )
 
-        # Extract width and height for clustering
-        boxes = downscaled_annotations[:, :, [visDrone.width_idx, visDrone.height_idx]]
+        boxes = downscaled_annotations[:, :, visDrone.width_idx:visDrone.height_idx + 1]  # (m, n, 6)
+
+        boxes = tf.concat([boxes[i] for i in range(boxes.shape[0])], axis=0)  # (m * n, 6)
 
         # Normalize box dimensions by grid cell size
         boxes = tf.stack([
@@ -134,20 +130,12 @@ class DataPreProcessor(tf.Module):
             num_parallel_calls=tf.data.AUTOTUNE
         )
 
-        # Combine all annotations into a single tensor
-        annotations_list = dataset.flat_map(lambda x: tf.data.Dataset.from_tensor_slices(x))
-        
-        initial_accumulator = tf.zeros(shape=(0, 6), dtype=tf.float32)
+        annotations_list = tf.ragged.stack([annotations for annotations in dataset])
 
-        annotations_list = annotations_list.reduce(
-            initial_accumulator,
-            lambda acc, x: tf.concat([acc, tf.expand_dims(x, axis=0)], axis=0)
-        )
-        
         return annotations_list
 
     def find_out_factors_H_W(self):
-        files = tf.io.gfile.glob(self.images_folder)
+        files = tf.io.gfile.glob(os.path.join(self.images_folder, '*.jpg'))
         num_files = len(files)
         self.factors_H = tf.TensorArray(dtype=tf.float32, size=num_files, dynamic_size=False)
         self.factors_W = tf.TensorArray(dtype=tf.float32, size=num_files, dynamic_size=False)
@@ -160,12 +148,10 @@ class DataPreProcessor(tf.Module):
             factor_W = tf.cast(tf.shape(orig_image)[1], tf.float32) / tf.cast(self.downscale_shape[1], tf.float32)
             self.factors_H = self.factors_H.write(idx, factor_H)
             self.factors_W = self.factors_W.write(idx, factor_W)
-            self.orig_image_shape = self.orig_image_shape.write(idx, tf.shape(orig_image))
 
         # Convert TensorArrays to tensors for further use
         self.factors_H = self.factors_H.stack()
         self.factors_W = self.factors_W.stack()
-        self.orig_image_shape = self.orig_image_shape.stack()
 
     def load_single_image(self, image_path):
         file_content = tf.io.read_file(image_path)
@@ -215,6 +201,7 @@ def _downscale_annotations(ann, factor_H, factor_W):
     Returns:
         ann (tf.Tensor): a tensor of shape (n, 6) where n is the number of annotations.
     """
+
     top_left_x_scaled = ann[..., visDrone.top_left_x_idx] / factor_W
     top_left_y_scaled = ann[..., visDrone.top_left_y_idx] / factor_H
     width_scaled = ann[..., visDrone.width_idx] / factor_W
@@ -232,14 +219,29 @@ def _downscale_annotations(ann, factor_H, factor_W):
     return ann_scaled
 
 
-def _kmeans_iou(box, clusters):
-    # box: shape (2,), clusters: shape (k, 2)
-    x = tf.minimum(clusters[:, 0], box[0])
-    y = tf.minimum(clusters[:, 1], box[1])
-    intersection = x * y
-    box_area = box[0] * box[1]
-    clusters_area = clusters[:, 0] * clusters[:, 1]
-    return intersection / (box_area + clusters_area - intersection)
+def _iou(boxes1, boxes2):
+    """
+    Compute Intersection over Union (IoU) between two sets of boxes.
+
+    Args:
+    boxes1 (tf.Tensor): First set of boxes with shape (num_boxes1, 2)
+    boxes2 (tf.Tensor): Second set of boxes with shape (num_boxes2, 2)
+
+    Returns:
+    tf.Tensor: IoU scores with shape (num_boxes1, num_boxes2)
+    """
+    areas1 = boxes1[:, 0] * boxes1[:, 1]
+    areas2 = boxes2[:, 0] * boxes2[:, 1]
+
+    intersections = tf.minimum(
+        tf.expand_dims(areas1, 1),
+        tf.expand_dims(areas2, 0)
+    )
+
+    unions = tf.expand_dims(areas1, 1) + tf.expand_dims(areas2, 0) - intersections
+
+    iou = intersections / (unions + 1e-8)
+    return iou
 
 
 def _cook_annotations(annotations, model_input_img_shape, S, B, C, anchors):
@@ -271,37 +273,46 @@ def _cook_annotations(annotations, model_input_img_shape, S, B, C, anchors):
     class_targets = tf.one_hot(tf.cast(annotations[:, visDrone.category_idx], tf.int32), depth=C, dtype=tf.float32)
     class_targets = (1 - 1e-6) * class_targets + 1e-6 / tf.cast(C, tf.float32)
 
-    # ground-truth box dimensions normalized by cell size
     gt_w = annotations[:, visDrone.width_idx] / cell_width
     gt_h = annotations[:, visDrone.height_idx] / cell_height
     gt_boxes = tf.stack([gt_w, gt_h], axis=1)
 
-    # IoU scores between ground-truth boxes and anchors
-    iou_scores = tf.map_fn(lambda box: _kmeans_iou(box, anchors), gt_boxes, fn_output_signature=tf.TensorSpec(shape=(B,), dtype=tf.float32))
+    iou_scores = _iou(gt_boxes, anchors)
 
-    # best anchor for each ground-truth box
-    best_anchor_indices = tf.argmax(iou_scores, axis=1)
+    best_anchor_indices = tf.cast(tf.argmax(iou_scores, axis=1), dtype=tf.int32)
 
-    # masks for each grid cell and anchor
-    cell_indices = tf.stack([cells_y, cells_x], axis=1)
-
-    # target tensor
     Y_target = tf.zeros((S, S, B * 5 + C), dtype=tf.float32)
 
-    # bbox targets
     gt_w_transformed = tf.math.log(gt_w / tf.gather(anchors[:, 0], best_anchor_indices) + 1e-10)
     gt_h_transformed = tf.math.log(gt_h / tf.gather(anchors[:, 1], best_anchor_indices) + 1e-10)
-    bbox_targets = tf.stack([X_cells_offset, Y_cells_offset, gt_w_transformed, gt_h_transformed, tf.ones_like(gt_w)], axis=1)
 
-    # Scatter bbox targets into the target tensor
-    bbox_start_indices = best_anchor_indices * 5
-    bbox_indices = tf.concat([cell_indices, tf.expand_dims(bbox_start_indices, axis=1)], axis=1)
-    Y_target = tf.tensor_scatter_nd_update(Y_target, bbox_indices, bbox_targets)
+    bbox_targets = tf.stack([
+        X_cells_offset,
+        Y_cells_offset,
+        gt_w_transformed,
+        gt_h_transformed,
+        tf.ones_like(gt_w)
+    ], axis=1)
 
-    # Scatter class targets into the target tensor
-    class_start_indices = B * 5
-    class_indices = tf.concat([cell_indices, tf.expand_dims(tf.fill([m], class_start_indices), axis=1)], axis=1)
-    Y_target = tf.tensor_scatter_nd_update(Y_target, class_indices, class_targets)
+    # TODO: vectorize it
+    for i in range(m):
+        cell_y, cell_x = cells_y[i], cells_x[i]
+        anchor_idx = best_anchor_indices[i]
+
+        bbox_start_idx = anchor_idx * 5
+
+        Y_target = tf.tensor_scatter_nd_update(
+            Y_target,
+            [[cell_y, cell_x, bbox_start_idx + j] for j in range(5)],
+            bbox_targets[i]
+        )
+
+        class_start_idx = B * 5
+        Y_target = tf.tensor_scatter_nd_update(
+            Y_target,
+            [[cell_y, cell_x, class_start_idx + j] for j in range(C)],
+            class_targets[i]
+        )
 
     return Y_target
 
@@ -311,24 +322,31 @@ def _kmeans(boxes, k, dist=tf.reduce_mean, max_iter=300):
     Perform k-means clustering on the given boxes using TensorFlow.
 
     Args:
-        boxes (tf.Tensor): A tensor of shape (num_boxes, 2) containing box dimensions (width, height).
-        k (int): The number of clusters.
-        dist (callable): A function to compute the centroid of a cluster (e.g., tf.reduce_mean or tf.reduce_median).
-        max_iter (int): The maximum number of iterations.
+    boxes (tf.Tensor): A tensor of shape (num_boxes, 2) containing box dimensions (width, height).
+    k (int): The number of clusters.
+    dist (callable): A function to compute the centroid of a cluster (e.g., tf.reduce_mean or tf.reduce_median).
+    max_iter (int): The maximum number of iterations.
 
     Returns:
-        tf.Tensor: A tensor of shape (k, 2) containing the cluster centroids.
+    tf.Tensor: A tensor of shape (k, 2) containing the cluster centroids.
     """
     num_boxes = tf.shape(boxes)[0]
-    clusters = tf.gather(boxes, tf.random.shuffle(tf.range(num_boxes))[:k])  # Randomly initialize clusters
-    last_clusters = tf.zeros((num_boxes,), dtype=tf.int32)
+
+    # Randomly initialize clusters
+    clusters = tf.gather(boxes, tf.random.shuffle(tf.range(num_boxes))[:k])
+
+    last_clusters = tf.zeros((num_boxes,), dtype=tf.int64)
 
     for _ in range(max_iter):
         # Compute IoU distances between all boxes and cluster centroids
         boxes_expanded = tf.expand_dims(boxes, axis=1)  # Shape: (num_boxes, 1, 2)
         clusters_expanded = tf.expand_dims(clusters, axis=0)  # Shape: (1, k, 2)
-        iou_scores = _kmeans_iou(boxes_expanded, clusters_expanded)  # Shape: (num_boxes, k)
-        distances = 1 - iou_scores  # Convert IoU to distance
+
+        # Compute IoU scores
+        iou_scores = _iou(boxes, clusters)  # Shape: (num_boxes, k)
+
+        # Convert IoU to distance
+        distances = 1 - iou_scores
 
         # Assign each box to the nearest cluster
         current_clusters = tf.argmin(distances, axis=1)
