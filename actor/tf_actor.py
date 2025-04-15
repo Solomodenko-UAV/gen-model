@@ -1,4 +1,3 @@
-from re import X
 import tensorflow as tf
 from cnn.pkg.layers.data_pre_processing.tf_data_pre_processing_gpu import DataPreProcessor, extract_visDrone_annotations_from_file
 from cnn.pkg.models.tf_tinysimmoYOLO import TFTinysimmoYOLOModel
@@ -56,7 +55,7 @@ class TFYOLOActorPhoto():
         history = self.model.fit(
             dataset,
             epochs=loops,
-            verbose=1, # type: ignore
+            verbose=1,  # type: ignore
         )
 
         return history
@@ -177,6 +176,47 @@ class TFYOLOActorPhoto():
         plt.tight_layout()
         plt.show()
 
+    def debug(self, annotation_path: str, image_path: str):
+        orig_image, digested_annotations, orig_annotations = self.data_processor.debug_annotations_preprocessing(
+            annotation_path=annotation_path,
+            image_path=image_path,
+            target_images_shape=self.input_shape,
+            S=self.model.S,
+            B=self.model.B,
+            C=self.model.C,
+        )
+
+        _, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 8))
+        plt.axis('off')
+        ax1.imshow(orig_image)
+        ax2.imshow(orig_image)
+
+        for i in range(len(digested_annotations)):
+            annotation = digested_annotations[i]
+            x1 = annotation[visDrone.top_left_x_idx]
+            y1 = annotation[visDrone.top_left_y_idx]
+            w = annotation[visDrone.width_idx]
+            h = annotation[visDrone.height_idx]
+            label = visDrone.categories.get(int(annotation[visDrone.category_idx]), "Unknown")
+
+            rect = patches.Rectangle((x1, y1), w, h, linewidth=1, edgecolor='r', facecolor='none')
+            ax1.add_patch(rect)
+            # ax.text(x1, y1, f'{label}', color='red', fontsize=12,)
+            
+        for i in range(len(orig_annotations)):
+            annotation = orig_annotations[i]
+            x1 = annotation[visDrone.top_left_x_idx]
+            y1 = annotation[visDrone.top_left_y_idx]
+            w = annotation[visDrone.width_idx]
+            h = annotation[visDrone.height_idx]
+            label = visDrone.categories.get(int(annotation[visDrone.category_idx]), "Unknown")
+
+            rect = patches.Rectangle((x1, y1), w, h, linewidth=1, edgecolor='r', facecolor='none')
+            ax2.add_patch(rect)
+            # ax.text(x1, y1, f'{label}', color='red', fontsize=12,)
+            
+        plt.show()
+
     def _compile_model(self, grid_cell_size: tuple):
         anchors = self.data_processor.find_out_anchors(grid_cell_size, self.model.B)
         self.model.set_anchors(tf.convert_to_tensor(anchors, dtype=tf.float32))
@@ -197,7 +237,7 @@ class TFYOLOActorPhoto():
         #     epsilon=1e-7,
         # )
 
-        optimizer = Adam(learning_rate=1e-4)
+        optimizer = Adam(learning_rate=1e-4, ema_momentum=0.8)
 
         self.model.compile(
             optimizer=optimizer,  # type: ignore

@@ -102,4 +102,6 @@ class TFYoloOutput(Layer):
         anchors = config.pop("anchors")
         l2_lambda = config.pop("l2_lambda")
 
+        anchors = tf.convert_to_tensor(anchors['config']['value'])
+
         return cls(S=S, B=B, C=C, anchors=anchors, l2_lambda=l2_lambda, **config)

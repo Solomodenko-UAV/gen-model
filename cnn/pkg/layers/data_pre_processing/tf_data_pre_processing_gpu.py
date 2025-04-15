@@ -157,6 +157,32 @@ class DataPreProcessor(tf.Module):
         file_content = tf.io.read_file(image_path)
         return tf.image.decode_jpeg(file_content, channels=3)
 
+    def debug_annotations_preprocessing(self, annotation_path: str, image_path: str, target_images_shape: tuple, S: int, B: int, C: int):
+        orig_image, _ = self.prepare_single_image(image_path, target_images_shape)
+
+        orig_shape = tf.shape(orig_image)
+        orig_height = tf.cast(orig_shape[0], tf.float32)
+        orig_width = tf.cast(orig_shape[1], tf.float32)
+        target_height, target_width = target_images_shape
+        factor_H = orig_height / tf.cast(target_height, tf.float32)
+        factor_W = orig_width / tf.cast(target_width, tf.float32)
+
+        annotations = extract_visDrone_annotations_from_file(annotation_path)
+        annotations = tf.cast(annotations, tf.float32)
+
+        downscaled_annotations = _downscale_annotations(annotations, factor_H, factor_W)
+        grid_cell_size = (target_width / S, target_height / S)
+        anchors = self.find_out_anchors(grid_cell_size, B)
+
+        cooked_annotations = _cook_annotations(downscaled_annotations, self.downscale_shape, S, B, C, anchors)
+        uncooked_annotations = _uncook_annotations(cooked_annotations, self.downscale_shape, S, B, C, anchors)
+
+        digested_annotations = _downscale_annotations(uncooked_annotations, 1 / factor_H, 1 / factor_W)
+
+        # digested_annotations = tf.cast(digested_annotations, tf.uint8)
+
+        return orig_image, digested_annotations, annotations
+
 
 def extract_visDrone_annotations_from_file(file_path):
     """
@@ -294,7 +320,6 @@ def _cook_annotations(annotations, model_input_img_shape, S, B, C, anchors):
         tf.ones_like(gt_w)
     ], axis=1)
 
-    # TODO: vectorize it
     for i in range(m):
         cell_y, cell_x = cells_y[i], cells_x[i]
         anchor_idx = best_anchor_indices[i]
@@ -315,6 +340,81 @@ def _cook_annotations(annotations, model_input_img_shape, S, B, C, anchors):
         )
 
     return Y_target
+
+
+def _uncook_annotations(Y_target, model_input_img_shape, S, B, C, anchors):
+    """
+    Convert network target tensor back to annotation format.
+
+    Args:
+        Y_target (tf.Tensor): Cooked tensor of shape (S, S, B*5 + C)
+        model_input_img_shape (tuple): Original input image shape (height, width)
+        S (int): Number of grid cells
+        B (int): Number of anchors per cell
+        C (int): Number of classes
+        anchors (tf.Tensor): Anchor boxes (B, 2)
+        confidence_threshold (float): Minimum confidence score to consider
+
+    Returns:
+        tf.Tensor: Uncooked annotations in format (N, 6) [x1, y1, w, h, class, confidence]
+    """
+    cell_height = model_input_img_shape[0] / S
+    cell_width = model_input_img_shape[1] / S
+
+    boxes = []
+    confidences = []
+    class_ids = []
+
+    # Convert grid coordinates to image coordinates
+    for cy in range(S):
+        for cx in range(S):
+            for b in range(B):
+                # Extract bounding box parameters
+                bbox_start = b * 5
+                x_offset = Y_target[cy, cx, bbox_start + 0].numpy()
+                y_offset = Y_target[cy, cx, bbox_start + 1].numpy()
+                w = Y_target[cy, cx, bbox_start + 2].numpy()
+                h = Y_target[cy, cx, bbox_start + 3].numpy()
+                confidence = Y_target[cy, cx, bbox_start + 4].numpy()
+                
+                if confidence < 0.5:
+                    continue
+
+                # Reverse transformations
+                x_center = (cx + x_offset) * cell_width
+                y_center = (cy + y_offset) * cell_height
+                width = np.exp(w) * anchors[b, 0] * cell_width
+                height = np.exp(h) * anchors[b, 1] * cell_height
+
+                # Convert to top-left coordinates
+                x1 = x_center - width/2
+                y1 = y_center - height/2
+
+                # Get class probabilities
+                class_start = B * 5
+                class_probs = Y_target[cy, cx, class_start:class_start+C].numpy()
+                class_id = np.argmax(class_probs)
+
+                boxes.append([x1, y1, width, height])
+                confidences.append(float(confidence))
+                class_ids.append(class_id)
+
+    if len(boxes) > 0:
+        boxes = np.array(boxes)
+        confidences = np.array(confidences)
+        class_ids = np.array(class_ids)
+
+        annotations = np.zeros((len(boxes), 6))
+        annotations[:, 0] = boxes[:, 0]  # x1
+        annotations[:, 1] = boxes[:, 1]  # y1
+        annotations[:, 2] = boxes[:, 2]  # width
+        annotations[:, 3] = boxes[:, 3]  # height
+        annotations[:, 4] = class_ids    # class
+        annotations[:, 5] = confidences  # confidence
+
+        return annotations
+
+    return np.zeros((0, 6))
 
 
 def _kmeans(boxes, k, dist=tf.reduce_mean, max_iter=300):
@@ -338,14 +438,8 @@ def _kmeans(boxes, k, dist=tf.reduce_mean, max_iter=300):
     last_clusters = tf.zeros((num_boxes,), dtype=tf.int64)
 
     for _ in range(max_iter):
-        # Compute IoU distances between all boxes and cluster centroids
-        boxes_expanded = tf.expand_dims(boxes, axis=1)  # Shape: (num_boxes, 1, 2)
-        clusters_expanded = tf.expand_dims(clusters, axis=0)  # Shape: (1, k, 2)
-
-        # Compute IoU scores
         iou_scores = _iou(boxes, clusters)  # Shape: (num_boxes, k)
 
-        # Convert IoU to distance
         distances = 1 - iou_scores
 
         # Assign each box to the nearest cluster
