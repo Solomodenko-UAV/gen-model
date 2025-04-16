@@ -36,7 +36,7 @@ class PReLU:
         Returns:
             dx (cp.ndarray): Gradient of the loss with respect to the input.
         """
-        x = self.cache
+        x = self.cache if self.cache is not None else cp.zeros_like(d_out)
         # derivative of PReLU with respect to x is 1 for x > 0, and alpha for x <= 0.
         dx = d_out * cp.where(x > 0, 1, self.alpha)
         # derivative with respect to alpha: only nonzero where x <= 0.

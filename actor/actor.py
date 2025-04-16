@@ -599,10 +599,8 @@ class YOLOActorPhoto():
                         grad_ciou = _ciou_gradient(pred_box_coords, target_box_coords)
                         grad_A[i, row, col, idx:idx+4] += lambda_coord * grad_ciou
 
-                       
-                       
                         # confidence loss. Quality focal loss for positives: y=1
-                        
+
                         # common == focal loss. Advanced == quality focal loss
                         quality = ciou_val
                         pred_conf = pred_bbox[visDrone.object_existence_idx]
@@ -611,7 +609,7 @@ class YOLOActorPhoto():
                         loss_advanced = - quality * (cp.abs(quality - pred_conf) ** gamma_focal) * cp.log(pred_conf + eps)
 
                         loss_conf = (1 - alpha_focal) * loss_common + alpha_focal * loss_advanced
-                        
+
                         grad_common = alpha_focal * (
                             gamma_focal * ((1 - pred_conf) ** (gamma_focal - 1)) * cp.log(pred_conf + eps)
                             - ((1 - pred_conf) ** gamma_focal) / (pred_conf + eps)
@@ -621,11 +619,11 @@ class YOLOActorPhoto():
                             alpha_focal * cp.sign(pred_conf - quality) * (cp.abs(quality - pred_conf) ** (gamma_focal - 1)) * cp.log(pred_conf + eps)
                             + (cp.abs(quality - pred_conf) ** gamma_focal) / (pred_conf + eps)
                         )
-                        
+
                         # TODO: as far as I can see, the more weights of common grad, the more confident moodel is about prediction. I suppose it's not totally right
-                        common_weight = (1 - alpha_focal) * 0.5 
+                        common_weight = (1 - alpha_focal) * 0.5
                         advanced_weight = 1 - common_weight
-                        
+
                         grad_conf = common_weight * grad_common + advanced_weight * grad_advanced
 
                         loss += loss_conf
@@ -664,6 +662,7 @@ class YOLOActorPhoto():
         cell_height = self.model_input_img_res[1] / S
 
         boxes = cp.zeros((m, S, S, B, 6))
+        
 
         for i in range(m):
             for row in range(S):
@@ -679,17 +678,17 @@ class YOLOActorPhoto():
                         # x = sigmoid(tx)
                         # y = sigmoid(ty)
 
-                        x_center_abs = (col + tx) * cell_width
-                        y_center_abs = (row + ty) * cell_height
+                        x_center_abs = tx * self.model_input_img_res[1]
+                        y_center_abs = ty * self.model_input_img_res[0]
 
                         # already scaled by anchor in feed_forward
-                        w_abs = tw * cell_width
-                        h_abs = th * cell_height
+                        w_abs = cp.exp(tw) * self.default_bounding_box_offsets[b][0] * self.model_input_img_res[1] / S
+                        h_abs = cp.exp(th) * self.default_bounding_box_offsets[b][1] * self.model_input_img_res[0] / S
 
                         x1 = x_center_abs - w_abs / 2
                         y1 = y_center_abs - h_abs / 2
 
-                        class_probs = model_output[i, row, col, B*5:]
+                        class_probs = model_output[i, row, col, b*5:]
                         class_id = cp.argmax(class_probs)
                         score = cp.max(class_probs) * confidence
 

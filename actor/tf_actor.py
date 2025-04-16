@@ -1,0 +1,359 @@
+import tensorflow as tf
+from cnn.pkg.layers.data_pre_processing.tf_data_pre_processing_gpu import DataPreProcessor, extract_visDrone_annotations_from_file
+from cnn.pkg.models.tf_tinysimmoYOLO import TFTinysimmoYOLOModel
+from cnn.pkg.layers.losses.tf_loss import YOLOLoss
+import matplotlib.patches as patches
+import matplotlib.pyplot as plt
+from keras.api.optimizers import Adadelta, Adam
+from metadata import visDrone
+
+
+class TFYOLOActorPhoto():
+    def __init__(self,
+                 data_folder: str,
+                 annotation_folder: str,
+                 model_input_img_res: tuple,
+                 model: TFTinysimmoYOLOModel,
+                 mini_batch_size: int
+                 ):
+
+        self.data_processor = DataPreProcessor(images_folder=data_folder, annotations_folder=annotation_folder, target_images_shape=model_input_img_res)
+        self.model = model
+        self.mini_batch_size = mini_batch_size
+        self.input_shape = model_input_img_res
+
+    def train_model(self, loops: int = 1, batch_size: int = 32):
+        """
+        Train the model with a TensorFlow Dataset.
+
+        Args:
+            loops (int): Number of epochs to train
+            images_per_epoch (int, optional): Total number of images to use per epoch. 
+                                            If None, uses the entire dataset.
+            batch_size (int): Number of images per batch
+
+        Returns:
+            Training history
+        """
+        grid_cell_size = (self.input_shape[0] / self.model.S, self.input_shape[1] / self.model.S)
+        self._compile_model(grid_cell_size)
+
+        dataset = self.data_processor.create_dataset(
+            target_images_shape=self.input_shape,
+            S=self.model.S,
+            B=self.model.B,
+            C=self.model.C,
+            anchors=self.model.get_anchors(),
+            batch_size=batch_size,
+        )
+
+        # for i, (images, labels) in enumerate(dataset):
+        #     print(f"Batch {i}:")
+        #     print("Images shape:", images.shape)
+        #     print("Labels shape:", labels.shape)
+
+        history = self.model.fit(
+            dataset,
+            epochs=loops,
+            verbose=1,  # type: ignore
+        )
+
+        return history
+
+    def print_bboxes(self, image_path: str, annotation_path: str):
+        image = self.data_processor.load_single_image(image_path)
+        annotations = extract_visDrone_annotations_from_file(annotation_path)
+        _, ax = plt.subplots(1, 1, figsize=(12, 8))
+        plt.axis('off')
+
+        ax.imshow(image)  # type: ignore
+
+        for i in range(len(annotations)):
+            annotation = annotations[i]
+            x1 = annotation[visDrone.top_left_x_idx]
+            y1 = annotation[visDrone.top_left_y_idx]
+            w = annotation[visDrone.width_idx]
+            h = annotation[visDrone.height_idx]
+            label = visDrone.categories.get(int(annotation[visDrone.category_idx]), "Unknown")
+
+            rect = patches.Rectangle((x1, y1), w, h, linewidth=1, edgecolor='r', facecolor='none')
+            ax.add_patch(rect)
+            ax.text(x1, y1, f'{label}', color='white', fontsize=12,)
+
+        plt.show()
+
+    def print_results(self, image_path: str, score_threshold: float = 0.1, iou_threshold: float = 0.5):
+        box_coordinates, scores, classes = self.predict(image_path=image_path, score_threshold=score_threshold, iou_threshold=iou_threshold)
+        if box_coordinates.shape[0] == 0:
+            print("No objects detected.")
+            return
+
+        image = self.data_processor.load_single_image(image_path=image_path)
+
+        y1, x1, y2, x2 = box_coordinates[0]
+
+        _, ax = plt.subplots(1, 1, figsize=(12, 8))
+        plt.axis('off')
+
+        ax.imshow(image)  # type: ignore
+
+        for i in range(len(box_coordinates)):
+            y1, x1, y2, x2 = box_coordinates[i]
+            rect = patches.Rectangle((x1, y1), x2 - x1, y2 - y1, linewidth=1, edgecolor='r', facecolor='none')
+            ax.add_patch(rect)
+            label = visDrone.categories.get(int(classes[i].numpy()), "Unknown")
+            ax.text(x1, y1, f'{label} {scores[i]:.2f}', color='white', fontsize=12,)
+
+        plt.show()
+
+    def predict(self, image_path: str, iou_threshold: float = 0.5, score_threshold: float = 0.1):
+        """
+        predict for the single image
+
+        Args:
+            image_path: path to the image
+            iou_threshold: IoU threshold for non-max suppression
+            score_threshold: score threshold for filtering boxes
+
+        Returns:
+            boxes_coordinates: tensor of shape (num_boxes, 4) [y1, x1, y2, x2]
+            boxes_scores: tensor of shape (num_boxes,)
+            boxes_classes: tensor of shape (num_boxes,)
+        """
+
+        img, image_downsampled = self.data_processor.prepare_single_image(image_path, self.input_shape)
+
+        factor_H = img.shape[0] / self.input_shape[0]
+        factor_W = img.shape[1] / self.input_shape[1]
+
+        image_downsampled = tf.expand_dims(image_downsampled, axis=0)  # add batch dimension (1, H, W, C)
+
+        predictions = self.model.predict(image_downsampled)
+
+        box_coordinates, scores, classes = self._bboxes_from_predictions(predictions, iou_threshold=iou_threshold, score_threshold=score_threshold)
+
+        box_coordinates = tf.convert_to_tensor(box_coordinates, dtype=tf.float32)
+        scores = tf.convert_to_tensor(scores, dtype=tf.float32)
+        classes = tf.convert_to_tensor(classes, dtype=tf.int64)
+
+        bboxes = self._upscale_bboxes(box_coordinates, factor_H, factor_W)
+
+        return bboxes, scores, classes
+
+    def plot_training_history(self, history):
+        # Get all metrics from the history object
+        metrics = history.history
+        epochs_range = range(1, len(metrics['loss']) + 1)
+
+        # Create a figure with subplots - one for loss, one for other metrics
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
+
+        # Plot loss
+        ax1.plot(epochs_range, metrics['loss'], 'b-', label='Training Loss')
+        if 'val_loss' in metrics:
+            ax1.plot(epochs_range, metrics['val_loss'], 'r-', label='Validation Loss')
+        ax1.set_title('Training and Validation Loss')
+        ax1.set_xlabel('Epochs')
+        ax1.set_ylabel('Loss')
+        ax1.legend()
+        ax1.grid(True)
+
+        # Plot other metrics if they exist (accuracy, mae, etc.)
+        for metric in metrics:
+            if metric != 'loss' and metric != 'val_loss':
+                ax2.plot(epochs_range, metrics[metric], label=f'Training {metric}')
+                # Check if there's a validation version of this metric
+                val_metric = f'val_{metric}'
+                if val_metric in metrics:
+                    ax2.plot(epochs_range, metrics[val_metric], '--', label=f'Validation {metric}')
+
+        ax2.set_title('Training and Validation Metrics')
+        ax2.set_xlabel('Epochs')
+        ax2.set_ylabel('Value')
+        ax2.legend()
+        ax2.grid(True)
+
+        plt.tight_layout()
+        plt.show()
+
+    def debug(self, annotation_path: str, image_path: str):
+        orig_image, digested_annotations, orig_annotations = self.data_processor.debug_annotations_preprocessing(
+            annotation_path=annotation_path,
+            image_path=image_path,
+            target_images_shape=self.input_shape,
+            S=self.model.S,
+            B=self.model.B,
+            C=self.model.C,
+        )
+
+        _, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 8))
+        plt.axis('off')
+        ax1.imshow(orig_image)
+        ax2.imshow(orig_image)
+
+        for i in range(len(digested_annotations)):
+            annotation = digested_annotations[i]
+            x1 = annotation[visDrone.top_left_x_idx]
+            y1 = annotation[visDrone.top_left_y_idx]
+            w = annotation[visDrone.width_idx]
+            h = annotation[visDrone.height_idx]
+            label = visDrone.categories.get(int(annotation[visDrone.category_idx]), "Unknown")
+
+            rect = patches.Rectangle((x1, y1), w, h, linewidth=1, edgecolor='r', facecolor='none')
+            ax1.add_patch(rect)
+            # ax.text(x1, y1, f'{label}', color='red', fontsize=12,)
+            
+        for i in range(len(orig_annotations)):
+            annotation = orig_annotations[i]
+            x1 = annotation[visDrone.top_left_x_idx]
+            y1 = annotation[visDrone.top_left_y_idx]
+            w = annotation[visDrone.width_idx]
+            h = annotation[visDrone.height_idx]
+            label = visDrone.categories.get(int(annotation[visDrone.category_idx]), "Unknown")
+
+            rect = patches.Rectangle((x1, y1), w, h, linewidth=1, edgecolor='r', facecolor='none')
+            ax2.add_patch(rect)
+            # ax.text(x1, y1, f'{label}', color='red', fontsize=12,)
+            
+        plt.show()
+
+    def _compile_model(self, grid_cell_size: tuple):
+        anchors = self.data_processor.find_out_anchors(grid_cell_size, self.model.B)
+        self.model.set_anchors(tf.convert_to_tensor(anchors, dtype=tf.float32))
+
+        loss = YOLOLoss(
+            S=self.model.S,
+            B=self.model.B,
+            C=self.model.C,
+            lambda_coord=5.0,
+            lambda_noobj=0.5,
+            focal_gamma=2.0,
+            focal_alpha=0.25,
+        )
+
+        # optimizer = Adadelta(
+        #     learning_rate=0.001,
+        #     rho=0.95,
+        #     epsilon=1e-7,
+        # )
+
+        optimizer = Adam(learning_rate=1e-4, ema_momentum=0.8)
+
+        self.model.compile(
+            optimizer=optimizer,  # type: ignore
+            loss=loss,
+            metrics=['accuracy'],
+        )
+
+    def _bboxes_from_predictions(self, predictions, iou_threshold=0.5, score_threshold=0.1):
+        """
+        Convert the predictions to bounding boxes.
+
+        Args:
+            predictions: tensor of shape (batch_size, S, S, B*5+C)
+            iou_threshold: IoU threshold for non-max suppression
+
+        Returns:
+            boxes_coordinates: tensor of shape (num_boxes, 4) [y1, x1, y2, x2]
+            boxes_scores: tensor of shape (num_boxes,)
+            boxes_classes: tensor of shape (num_boxes,)
+        """
+
+        m = predictions.shape[0]
+        B = self.model.B
+
+        all_boxes = []
+        all_scores = []
+        all_classes = []
+
+        anchor_dims = self.model.get_anchors()
+
+        # Process each item in the batch
+        for i in range(m):
+            batch_pred = predictions[i]  # Shape: (S, S, B*5+C)
+
+            # For each bounding box predictor
+            for box_idx in range(B):
+                start_idx = box_idx * 5
+
+                # Extract predictions for this box
+                x = batch_pred[:, :, start_idx]      # Already contains grid offset, normalized [0-1]
+                y = batch_pred[:, :, start_idx + 1]  # Already contains grid offset, normalized [0-1]
+                w = batch_pred[:, :, start_idx + 2]  # Width (normalized)
+                h = batch_pred[:, :, start_idx + 3]  # Height (normalized)
+                confidence = batch_pred[:, :, start_idx + 4]  # Confidence score
+
+                # absolute coordinates
+                abs_x = x * self.input_shape[1]
+                abs_y = y * self.input_shape[0]
+
+                abs_w = tf.exp(w) * anchor_dims[box_idx, 0:1] * self.input_shape[1] / self.model.S
+                abs_h = tf.exp(h) * anchor_dims[box_idx, 1:2] * self.input_shape[0] / self.model.S
+
+                # corner format [y1, x1, y2, x2]
+                y1 = abs_y - abs_h / 2
+                x1 = abs_x - abs_w / 2
+                y2 = abs_y + abs_h / 2
+                x2 = abs_x + abs_w / 2
+
+                # class predictions
+                class_scores = batch_pred[:, :, B*5:]  # Shape: (S, S, C)
+                class_idx = tf.argmax(class_scores, axis=-1)  # Shape: (S, S)
+                max_class_score = tf.reduce_max(class_scores, axis=-1)  # Shape: (S, S)
+
+                # Final score is confidence * class score
+                final_scores = confidence * max_class_score
+
+                # Reshape everything to [S*S, ...]
+                boxes = tf.stack([y1, x1, y2, x2], axis=-1)
+                boxes = tf.reshape(boxes, [-1, 4])
+                final_scores = tf.reshape(final_scores, [-1])
+                class_idx = tf.reshape(class_idx, [-1])
+
+                # Filter out low confidence boxes
+                conf_mask = final_scores > score_threshold
+                filtered_boxes = tf.boolean_mask(boxes, conf_mask)
+                filtered_scores = tf.boolean_mask(final_scores, conf_mask)
+                filtered_classes = tf.boolean_mask(class_idx, conf_mask)
+
+                # Apply NMS
+                selected_indices = tf.image.non_max_suppression(
+                    filtered_boxes, filtered_scores, max_output_size=100,
+                    iou_threshold=iou_threshold
+                )
+
+                if selected_indices.shape[0] == 0:
+                    continue
+
+                selected_boxes = tf.gather(filtered_boxes, selected_indices)
+                selected_scores = tf.gather(filtered_scores, selected_indices)
+                selected_classes = tf.gather(filtered_classes, selected_indices)
+
+                all_boxes.append(selected_boxes)
+                all_scores.append(selected_scores)
+                all_classes.append(selected_classes)
+
+        # combine results from all batches
+        if all_boxes:
+            boxes_coordinates = tf.concat(all_boxes, axis=0)
+            boxes_scores = tf.concat(all_scores, axis=0)
+            boxes_classes = tf.concat(all_classes, axis=0)
+            return boxes_coordinates, boxes_scores, boxes_classes
+        else:
+            # empty tensors if no boxes were found
+            return tf.zeros((0, 4)), tf.zeros((0,)), tf.zeros((0,), dtype=tf.int64)
+
+    def _upscale_bboxes(self, bboxes: tf.Tensor, factor_H: float, factor_W: float):
+        """
+        Upscale the bounding boxes to the original image size.
+
+        Args:
+            bboxes (tf.Tensor): bounding boxes of shape (m, 4) [y1, x1, y2, x2]
+
+        Returns:
+            tf.Tensor: upscaled bounding boxes of shape (m, 4)
+        """
+        scaling_factors = tf.constant([factor_H, factor_W, factor_H, factor_W], dtype=bboxes.dtype)
+        bboxes = tf.multiply(bboxes, scaling_factors)
+
+        return bboxes
